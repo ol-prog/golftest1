@@ -4,13 +4,6 @@
 // Report coordinates are normalised by frame width, so multiplying by the
 // canvas width is all that is ever needed.
 
-const POSE_BONES = [
-  [11, 12], [11, 23], [12, 24], [23, 24],
-  [11, 13], [13, 15], [12, 14], [14, 16],
-  [23, 25], [25, 27], [24, 26], [26, 28],
-  [27, 31], [28, 32],
-];
-
 const COL = {
   back: '#4cc2ff',
   down: '#ffb020',
@@ -18,6 +11,8 @@ const COL = {
   ball: '#ffffff',
   ballPath: '#7bf1a8',
   pose: '#c9a6ff',
+  spine: '#7bf1a8',
+  head: '#ffd166',
   body: '#8a8f98',
 };
 
@@ -33,21 +28,57 @@ export function sizeCanvasTo(canvas, aspect, cssWidth) {
   return canvas.getContext('2d');
 }
 
+/**
+ * Trace a polyline as a smooth curve, by running quadratic Beziers through the
+ * midpoints of each pair of segments. A swing arc drawn as raw straight
+ * segments looks like a scribble however good the underlying points are.
+ */
+export function smoothPath(ctx, pts) {
+  const n = pts.length;
+  if (n < 2) return;
+  ctx.moveTo(pts[0].x, pts[0].y);
+  if (n === 2) { ctx.lineTo(pts[1].x, pts[1].y); return; }
+  for (let i = 1; i < n - 1; i++) {
+    ctx.quadraticCurveTo(
+      pts[i].x, pts[i].y,
+      (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2,
+    );
+  }
+  ctx.quadraticCurveTo(pts[n - 2].x, pts[n - 2].y, pts[n - 1].x, pts[n - 1].y);
+}
+
+/**
+ * Draw a run of points as one glowing curve. Gaps are breaks, not bridges: a
+ * line drawn across frames where the club was never found is a guess, and it
+ * should not look like a measurement.
+ */
 function line(ctx, pts, colour, width, w) {
-  const usable = pts.filter(Boolean);
-  if (usable.length < 2) return;
-  ctx.beginPath();
-  ctx.lineWidth = width;
-  ctx.strokeStyle = colour;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  usable.forEach((p, i) => {
-    const x = p.x * w;
-    const y = p.y * w;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  const runs = [];
+  let run = [];
+  for (const p of pts) {
+    if (!p) {
+      if (run.length > 1) runs.push(run);
+      run = [];
+      continue;
+    }
+    run.push({ x: p.x * w, y: p.y * w });
+  }
+  if (run.length > 1) runs.push(run);
+
+  for (const pass of [0, 1]) {
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = colour;
+    ctx.globalAlpha = pass === 0 ? 0.25 : 1;
+    ctx.lineWidth = pass === 0 ? width * 3 : width;
+    for (const r of runs) {
+      ctx.beginPath();
+      smoothPath(ctx, r);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 }
 
 function dot(ctx, p, colour, r, w) {
@@ -81,7 +112,10 @@ export function drawTrace(ctx, image, report, { phase = 'all', showPose = null, 
   if (phase === 'all') line(ctx, thruSeg, COL.through, stroke * 0.9, w);
 
   if (showPose && report.poseFrames && report.poseFrames[showPose]) {
-    drawPose(ctx, report.poseFrames[showPose], w);
+    drawPosture(ctx, report.poseFrames[showPose], w, {
+      reference: showPose === 'address' ? null : report.poseFrames.address,
+      showHeadMove: showPose !== 'address',
+    });
   }
 
   if (showBall && report.ball && report.ball.rest) {
@@ -91,11 +125,8 @@ export function drawTrace(ctx, image, report, { phase = 'all', showPose = null, 
     ctx.lineWidth = Math.max(1.5, stroke * 0.6);
     ctx.arc(b.x * w, b.y * w, Math.max(4, w / 90), 0, Math.PI * 2);
     ctx.stroke();
-    if (report.ball.path && report.ball.path.length > 1) {
-      ctx.setLineDash([stroke * 2, stroke * 1.5]);
-      line(ctx, report.ball.path, COL.ballPath, stroke * 0.8, w);
-      ctx.setLineDash([]);
-    }
+    const flight = report.ball.flight || report.ball.path;
+    if (flight && flight.length > 1) line(ctx, flight, COL.ballPath, stroke * 0.95, w);
   }
 
   // Key positions along the arc.
@@ -110,27 +141,124 @@ export function drawTrace(ctx, image, report, { phase = 'all', showPose = null, 
   }
 }
 
-export function drawPose(ctx, landmarks, w) {
+const LM = {
+  nose: 0,
+  leftShoulder: 11, rightShoulder: 12,
+  leftElbow: 13, rightElbow: 14,
+  leftWrist: 15, rightWrist: 16,
+  leftHip: 23, rightHip: 24,
+  leftKnee: 25, rightKnee: 26,
+  leftAnkle: 27, rightAnkle: 28,
+};
+
+/** A small label chip, so numbers stay readable over grass or sky. */
+function chip(ctx, text, x, y, colour, w) {
+  const size = Math.max(11, w / 34);
+  ctx.font = `600 ${size}px -apple-system, system-ui, sans-serif`;
+  const padX = size * 0.45;
+  const tw = ctx.measureText(text).width;
+  const bx = Math.min(Math.max(x, 2), ctx.canvas.width - tw - padX * 2 - 2);
+  const by = Math.min(Math.max(y - size, 2), ctx.canvas.height - size * 1.6 - 2);
+  ctx.fillStyle = 'rgba(6,9,14,0.72)';
+  ctx.beginPath();
+  const bw = tw + padX * 2;
+  const bh = size * 1.5;
+  // roundRect is recent; fall back to a plain box rather than throwing.
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(bx, by, bw, bh, size * 0.35);
+  else ctx.rect(bx, by, bw, bh);
+  ctx.fill();
+  ctx.fillStyle = colour;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, bx + padX, by + size * 0.78);
+}
+
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, v: Math.min(a.v, b.v) });
+
+function seg(ctx, a, b, colour, width, w, dashed = false) {
   ctx.save();
-  ctx.strokeStyle = COL.pose;
-  ctx.fillStyle = COL.pose;
-  ctx.lineWidth = Math.max(1.5, w / 320);
-  for (const [a, b] of POSE_BONES) {
-    const pa = landmarks[a];
-    const pb = landmarks[b];
-    if (!pa || !pb || pa.v < 0.3 || pb.v < 0.3) continue;
-    ctx.beginPath();
-    ctx.moveTo(pa.x * w, pa.y * w);
-    ctx.lineTo(pb.x * w, pb.y * w);
-    ctx.stroke();
-  }
-  for (const p of landmarks) {
-    if (!p || p.v < 0.4) continue;
-    ctx.beginPath();
-    ctx.arc(p.x * w, p.y * w, Math.max(1.5, w / 420), 0, Math.PI * 2);
-    ctx.fill();
-  }
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  if (dashed) ctx.setLineDash([width * 2.2, width * 2]);
+  ctx.beginPath();
+  ctx.moveTo(a.x * w, a.y * w);
+  ctx.lineTo(b.x * w, b.y * w);
+  ctx.stroke();
   ctx.restore();
+}
+
+/**
+ * Body position as the handful of lines a coach would actually draw on a still:
+ * the spine, the shoulder and hip lines, and where the head has moved to. A
+ * thirty-three point skeleton looks impressive and tells you nothing you can
+ * act on.
+ *
+ * `reference` is the same golfer at address, so the change can be shown rather
+ * than just the current position.
+ */
+export function drawPosture(ctx, landmarks, w, { reference = null, showHeadMove = false } = {}) {
+  if (!landmarks) return;
+  const p = (i) => landmarks[i];
+  const visible = (...idx) => idx.every((i) => p(i) && p(i).v > 0.35);
+  const stroke = Math.max(2, w / 220);
+
+  if (visible(LM.leftShoulder, LM.rightShoulder, LM.leftHip, LM.rightHip)) {
+    const sh = mid(p(LM.leftShoulder), p(LM.rightShoulder));
+    const hip = mid(p(LM.leftHip), p(LM.rightHip));
+
+    // Vertical through the hips: the reference the spine angle is measured off.
+    seg(ctx, { x: hip.x, y: hip.y }, { x: hip.x, y: hip.y - 0.42 }, 'rgba(233,237,243,0.4)', stroke * 0.8, w, true);
+
+    // Shoulder and hip lines.
+    seg(ctx, p(LM.leftShoulder), p(LM.rightShoulder), COL.pose, stroke * 1.4, w);
+    seg(ctx, p(LM.leftHip), p(LM.rightHip), COL.pose, stroke * 1.4, w);
+
+    // The spine itself.
+    seg(ctx, hip, sh, COL.spine, stroke * 2, w);
+
+    const tilt = Math.atan2(sh.x - hip.x, Math.max(1e-6, hip.y - sh.y)) * 180 / Math.PI;
+    chip(ctx, `spine ${tilt >= 0 ? '' : '−'}${Math.abs(tilt).toFixed(0)}°`,
+      hip.x * w + stroke * 4, (hip.y + sh.y) / 2 * w, COL.spine, w);
+
+    // The same spine at address, ghosted in place, so a change of posture is
+    // visible rather than something to remember between screens.
+    if (reference) {
+      const rsh = mid(reference[LM.leftShoulder], reference[LM.rightShoulder]);
+      const rhip = mid(reference[LM.leftHip], reference[LM.rightHip]);
+      const anchored = {
+        x: hip.x + (rsh.x - rhip.x),
+        y: hip.y + (rsh.y - rhip.y),
+      };
+      seg(ctx, hip, anchored, 'rgba(233,237,243,0.55)', stroke * 1.2, w, true);
+    }
+  }
+
+  if (visible(LM.leftKnee, LM.rightKnee, LM.leftAnkle, LM.rightAnkle)) {
+    seg(ctx, p(LM.leftHip), p(LM.leftKnee), COL.pose, stroke, w);
+    seg(ctx, p(LM.leftKnee), p(LM.leftAnkle), COL.pose, stroke, w);
+    seg(ctx, p(LM.rightHip), p(LM.rightKnee), COL.pose, stroke, w);
+    seg(ctx, p(LM.rightKnee), p(LM.rightAnkle), COL.pose, stroke, w);
+  }
+
+  // Head: where it is, and how far it has travelled from address.
+  if (p(LM.nose) && p(LM.nose).v > 0.35) {
+    const head = p(LM.nose);
+    ctx.save();
+    ctx.strokeStyle = COL.head;
+    ctx.lineWidth = stroke * 1.3;
+    ctx.beginPath();
+    ctx.arc(head.x * w, head.y * w, Math.max(6, w / 40), 0, Math.PI * 2);
+    ctx.stroke();
+    if (showHeadMove && reference && reference[LM.nose] && reference[LM.nose].v > 0.35) {
+      const from = reference[LM.nose];
+      seg(ctx, from, head, COL.head, stroke, w, true);
+      const moved = Math.hypot(head.x - from.x, head.y - from.y);
+      if (moved > 0.01) {
+        chip(ctx, 'head moved', head.x * w + w / 30, head.y * w - w / 30, COL.head, w);
+      }
+    }
+    ctx.restore();
+  }
 }
 
 /**

@@ -9,8 +9,40 @@ import * as club from '../js/club.js';
 import * as ball from '../js/ball.js';
 import * as coach from '../js/coach.js';
 
+// Every module must load and expose what its importers reach for. A missed
+// export shows up in the browser only as a blank screen, because the whole
+// module graph fails at once.
+const MODULES = {
+  '../js/util.js': ['clamp', 'smooth', 'argmax', 'fitLine', 'getSettings'],
+  '../js/motion.js': ['toGray', 'diff', 'blobs', 'refineAround', 'noiseFloor'],
+  '../js/events.js': ['computeEnergy', 'detectEvents', 'estimateSlomo'],
+  '../js/club.js': ['trackClub', 'smoothTrack', 'cleanTrack', 'clubMetrics',
+    'deliveryMetrics', 'framesForFactory', 'strikeIndexFromBall', 'estimateBodyCentre'],
+  '../js/ball.js': ['findBallAtRest', 'trackBall', 'launchFromPath', 'flightCurve'],
+  '../js/pose.js': ['loadPose', 'detectOn', 'poseSummary', 'bodyMetrics', 'pixelScale', 'poseLooksHuman'],
+  '../js/coach.js': ['coachReport', 'filmingTips'],
+  '../js/overlay.js': ['drawTrace', 'drawPosture', 'drawEnergy', 'drawSparkline', 'smoothPath', 'sizeCanvasTo'],
+  '../js/frames.js': ['loadVideo', 'scanCoarse', 'extractRange', 'grabStill', 'detectFrameRate'],
+  '../js/analyse.js': ['analyseSwing'],
+  '../js/tracer.js': ['Tracer'],
+  '../js/store.js': ['saveShot', 'listShots', 'deleteShot', 'pruneClips'],
+  '../js/capture.js': ['Capture', 'captureSupported'],
+};
+
 const checks = [];
 const ok = (name, cond) => checks.push(`${cond ? 'ok  ' : 'FAIL'} ${name}`);
+
+for (const [path, names] of Object.entries(MODULES)) {
+  let mod = null;
+  try {
+    mod = await import(path);
+  } catch (err) {
+    ok(`${path} imports (${err.message})`, false);
+    continue;
+  }
+  const missing = names.filter((n) => mod[n] === undefined);
+  ok(`${path} exports${missing.length ? ' — missing ' + missing.join(', ') : ''}`, missing.length === 0);
+}
 
 // Degenerate inputs must not throw.
 ok('detectEvents too short', events.detectEvents(new Float64Array(4), [0, 1, 2, 3]).ok === false);
@@ -34,9 +66,16 @@ for (let i = 0; i < 60; i++) {
 }
 const framesFor = club.framesForFactory(times, 0, pts.length, 1);
 const d = club.deliveryMetrics(pts, times, 0, 30, 'right', framesFor);
-ok(`arc tangent at bottom is level (${d.attackAngleDeg?.toFixed(1)}°)`, Math.abs(d.attackAngleDeg) < 2);
+ok(`arc tangent at bottom is level (${d.attackAngleDeg?.toFixed(1)}°)`,
+  Number.isFinite(d.attackAngleDeg) && Math.abs(d.attackAngleDeg) < 2);
 const d2 = club.deliveryMetrics(pts, times, 0, 20, 'right', framesFor);
-ok(`arc tangent 10° before bottom descends (${d2.attackAngleDeg?.toFixed(1)}°)`, d2.attackAngleDeg < -6 && d2.attackAngleDeg > -14);
+ok(`arc tangent 10° before bottom descends (${d2.attackAngleDeg?.toFixed(1)}°)`,
+  Number.isFinite(d2.attackAngleDeg) && d2.attackAngleDeg < -6 && d2.attackAngleDeg > -14);
+
+// A ragged arc must produce no angle at all rather than a confident wrong one.
+const noisy = pts.map((p, i) => ({ x: p.x + (i % 2 ? 9 : -9), y: p.y + (i % 3 ? 8 : -8) }));
+const d3 = club.deliveryMetrics(noisy, times, 0, 30, 'right', framesFor);
+ok('a ragged arc yields no angle of attack', d3.attackAngleDeg === null);
 
 // The coach must cope with a report that has almost nothing in it.
 const bare = coach.coachReport({ view: 'faceon', timing: {}, club: {}, ball: {}, body: null });

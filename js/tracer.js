@@ -5,7 +5,7 @@
 // purely a matter of drawing the part of it that has happened by the video's
 // current time, and keeping that lined up with the picture underneath.
 
-import { clamp } from './util.js';
+import { smoothPath } from './overlay.js';
 
 const COL = {
   back: '#4cc2ff',
@@ -50,8 +50,10 @@ function buildPath(report) {
     if (!p) { points.push(null); continue; }
     points.push({ x: p.x, y: p.y, t: t0 + trace.times[i] });
   }
-  const ball = (report.ball && report.ball.path ? report.ball.path : [])
-    .filter((p) => p && Number.isFinite(p.t));
+  // Prefer the fitted flight curve; fall back to raw detections on reports
+  // saved before it existed.
+  const ballSource = (report.ball && (report.ball.flight || report.ball.path)) || [];
+  const ball = ballSource.filter((p) => p && Number.isFinite(p.t));
   return { points, idx: trace.idx, ball };
 }
 
@@ -142,9 +144,8 @@ export class Tracer {
     const box = contentRect(this.video, size.cssW, size.cssH);
     const now = this.video.currentTime;
     // Coordinates were normalised by frame width, so both axes scale by width.
-    const px = (p) => box.x + p.x * box.w;
-    const py = (p) => box.y + p.y * box.w;
-    const stroke = Math.max(2.5, box.w / 150);
+    const px = (p) => ({ x: box.x + p.x * box.w, y: box.y + p.y * box.w });
+    const stroke = Math.max(2.5, box.w / 160);
 
     const { points, idx } = this.path;
     const segments = [
@@ -153,60 +154,61 @@ export class Tracer {
       [idx.impact, Math.min(points.length - 1, idx.finish), COL.through],
     ];
 
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
     let head = null;
-
     for (const [from, to, colour] of segments) {
-      // Two passes: a soft wide glow underneath, the line itself on top. It is
-      // what keeps a thin bright line readable against grass and sky both.
-      for (const pass of [0, 1]) {
-        ctx.beginPath();
-        ctx.strokeStyle = colour;
-        ctx.globalAlpha = pass === 0 ? 0.28 : 1;
-        ctx.lineWidth = pass === 0 ? stroke * 3.2 : stroke;
-        let drawing = false;
-        for (let i = from; i <= to; i++) {
-          const p = points[i];
-          if (!p) { drawing = false; continue; }
-          if (p.t > now) break;
-          if (pass === 1) head = p;
-          if (!drawing) { ctx.moveTo(px(p), py(p)); drawing = true; }
-          else ctx.lineTo(px(p), py(p));
+      // Break the run wherever the club was never found, rather than drawing a
+      // straight line across the gap and passing it off as the swing.
+      const runs = [];
+      let run = [];
+      for (let i = from; i <= to; i++) {
+        const p = points[i];
+        if (!p || p.t > now) {
+          if (run.length > 1) runs.push(run);
+          run = [];
+          if (p && p.t > now) break;
+          continue;
         }
-        ctx.stroke();
+        run.push(px(p));
+        head = p;
       }
+      if (run.length > 1) runs.push(run);
+      this._strokeRuns(runs, colour, stroke);
     }
 
-    // Ball flight, dashed so it reads as a different thing from the club path.
-    const flown = this.path.ball.filter((p) => p.t <= now);
-    if (flown.length > 1) {
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([stroke * 2.5, stroke * 2]);
-      ctx.strokeStyle = COL.ball;
-      ctx.lineWidth = stroke * 0.9;
-      ctx.beginPath();
-      flown.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(px(p), py(p));
-        else ctx.lineTo(px(p), py(p));
-      });
-      ctx.stroke();
-      ctx.setLineDash([]);
-      const last = flown[flown.length - 1];
-      ctx.fillStyle = COL.ball;
-      ctx.beginPath();
-      ctx.arc(px(last), py(last), stroke * 1.1, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Ball flight: the fitted parabola, drawn solid and bright the way a
+    // broadcast tracer is, and carried on past the last frame the ball was
+    // actually visible in.
+    const flown = this.path.ball.filter((p) => p.t <= now).map(px);
+    if (flown.length > 1) this._strokeRuns([flown], COL.ball, stroke * 1.05);
 
-    // A bright head on the line, so the eye can find where the club is now.
+    // A bright head on the club line, so the eye can find where it is now.
     if (head) {
+      const h = px(head);
       ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.fillStyle = '#ffffff';
-      ctx.arc(px(head), py(head), stroke * 1.35, 0, Math.PI * 2);
+      ctx.arc(h.x, h.y, stroke * 1.3, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** Glow underneath, line on top — what keeps a thin bright line readable. */
+  _strokeRuns(runs, colour, width) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = colour;
+    for (const pass of [0, 1]) {
+      ctx.globalAlpha = pass === 0 ? 0.25 : 1;
+      ctx.lineWidth = pass === 0 ? width * 3 : width;
+      for (const run of runs) {
+        ctx.beginPath();
+        smoothPath(ctx, run);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 }

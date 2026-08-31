@@ -104,9 +104,12 @@ function strikeNotes(r) {
     if (a < -8) {
       out.push(note('watch', `Steep angle of attack (${fmt1(a)}°)`,
         'You are hitting down on it steeply. That produces deep divots, high spin and a loss of distance, and it punishes any low point error.', 3));
-    } else if (a < -1) {
+    } else if (a < -2) {
       out.push(note('good', `Descending strike (${fmt1(a)}°)`,
         'A normal iron delivery — hitting down on the ball and compressing it.', 1));
+    } else if (a >= -2 && a <= 2) {
+      out.push(note('info', `Bottoming out level with the ball (${fmt1(a)}°)`,
+        'The club is neither descending nor ascending much at the ball. Fine off a tee; with an iron off the turf you would rather still be coming down. This is measured from a flat picture, so a couple of degrees either way is within the noise.', 1));
     } else if (a > 3) {
       out.push(note('info', `Ascending strike (${fmt1(a)}°)`,
         'You are hitting up on it. Right for a driver off a tee; with an iron off the ground it usually means thin contact.', 2));

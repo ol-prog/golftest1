@@ -77,12 +77,39 @@ start.
 
 ## The swing tracer
 
-Play the clip back and a line draws itself along your club head as it goes —
-blue through the backswing, orange coming down, red through the finish, with the
-ball flight in green dashes after impact. The path is not being detected live;
-it was measured during analysis, so the line is exactly the path the numbers
-were taken from. If the tracer does not follow your club head, that is your
-signal to distrust the plane and path figures on that shot.
+Play the clip back and one smooth line draws itself along your club head as it
+goes — blue through the backswing, orange coming down, red through the finish,
+with the ball flight carrying on in green after impact.
+
+The line is a **fitted curve, not raw detections**. A club head cannot teleport,
+so a detection that disagrees sharply with its neighbours is wrong rather than
+interesting. Every point is refitted from a local weighted quadratic, points that
+disagree with that fit are discarded, and the fit is repeated without them. What
+gets drawn is the arc that survives.
+
+Three things it does that a naive tracker does not:
+
+- **It takes the leading edge of the club, not the middle of the shaft.** A
+  phone shutter is open long enough that a fast club smears across the frame, so
+  the moving blob spans where the club was and where it now is. Picking the
+  point that is both furthest from your body and furthest along the direction of
+  travel finds the head; averaging over the blob finds a spot part-way up the
+  shaft that wanders as more or less of the shaft comes into view.
+- **It refuses to follow the ball.** After impact the ball leaves from exactly
+  where the club head is, fast and in a straight line — the one thing a
+  continuity tracker will happily follow instead of the club. Once the flight is
+  known, any club detection sitting on it is thrown out and the arc re-fitted.
+- **It breaks rather than bridges.** Where the club genuinely could not be
+  found, the line stops. A line drawn across a gap is a guess the viewer cannot
+  tell apart from a measurement.
+
+The ball line is the **fitted parabola** of the flight, not a join-the-dots of
+where the ball was seen. A struck ball is a projectile, so that shape is the
+right one, and fitting it lets the line carry on past the last frame the ball was
+visible in — which is what makes a tracer read as a shot rather than a few dots.
+
+If the line does not follow your club head, that is your signal to distrust the
+plane and path figures on that shot.
 
 Quarter and half speed are there because a downswing is a quarter of a second
 and you cannot see a transition at full speed. **Replay** jumps back to address
@@ -93,6 +120,25 @@ The tracer needs the clip itself, so clips are kept on the phone. Slow-motion
 footage is large — a 1080p 240fps clip runs to tens of megabytes — so when
 storage starts filling up the app drops the video from the oldest shots first
 and tells you it did. The measurements and key frames for those shots stay.
+
+---
+
+## Body angles
+
+The body overlay draws the handful of lines a coach would actually draw on a
+still: your spine against a vertical through your hips, your shoulder and hip
+lines, your knees, and where your head is. On any frame other than address it
+also ghosts in the spine angle you set up with, so a loss of posture is visible
+rather than something to hold in your head between screens.
+
+A thirty-three point skeleton looks impressive and tells you nothing you can act
+on, so it is gone.
+
+Nothing is drawn unless the detection actually looks like a person standing over
+a ball — feet below head, hips between shoulders and feet, sensible proportions,
+a spine that is not lying on its side. The pose model returns thirty-three points
+whether or not there is a golfer to find, and angle lines through a bad detection
+look authoritative and are wrong.
 
 ---
 
@@ -130,7 +176,11 @@ signal but not a real protractor.
 
 It is a mirror with a memory, not a launch monitor.
 
-The app suppresses measurements rather than guessing. If the frame rate is too
+The app suppresses measurements rather than guessing. Angle of attack and club
+path are only reported when the fitted swing arc is clean enough to take a
+tangent from — without that test the same swing came back as four degrees
+descending on one reading and twenty ascending on the next, and a number that
+unstable is worse than no number. If the frame rate is too
 low to measure a delivery, or a figure comes out outside any believable range,
 it says so instead of printing a number.
 
@@ -151,7 +201,7 @@ All in vanilla JavaScript, no build step, no framework.
 | `js/analyse.js` | The pipeline, plus the plausibility gate on every real-world figure. |
 | `js/coach.js` | Turns measurements into plain English. Rule-based and offline. |
 | `js/capture.js` | Camera, framing guide, and the three recording modes. |
-| `js/tracer.js` | Draws the club-head path over the clip in step with playback. |
+| `js/tracer.js` | Draws the fitted club-head path and ball flight over the clip, in step with playback. |
 
 Two details worth knowing:
 
@@ -178,10 +228,21 @@ a chosen angle of attack and a chosen launch angle:
 | | Measured | True |
 |---|---|---|
 | Tempo ratio | 2.87 : 1 | 3.04 : 1 |
-| Angle of attack | −2.4° | −4.0° |
-| Launch angle | 19.0° | 19.0° |
+| Angle of attack | −6.0° to +1.6° | −4.0° |
+| Launch angle | 18.9°–19.0° | 19.0° |
 | Plane shift (symmetrical swing) | −0.4° | 0° |
 | Ball position | within 0.6% of frame width | — |
+
+Club-head tracking is measured against the arc the fixture actually drew,
+including a version with motion blur, sensor noise, a golfer moving in the next
+bay and a flag in the wind:
+
+| | Clean | With blur and clutter |
+|---|---|---|
+| Median error | 0.16% of frame width | 0.14% |
+| 95th percentile | 1.0% | 1.0% |
+| Through the downswing | 0.17% median, 0.80% worst | 0.09% median, 0.55% worst |
+| Frame-to-frame jitter | 0.14% | 0.11% |
 
 Repeated runs of the same clip agree to within a tenth of a degree on launch
 angle and a hundredth on tempo. At 30fps, without slo-mo, tempo lands around

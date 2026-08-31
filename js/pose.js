@@ -138,6 +138,29 @@ export function poseSummary(lms) {
 }
 
 /**
+ * Does this detection actually look like a person standing over a ball?
+ *
+ * The pose model always returns thirty-three points, whether or not there is a
+ * golfer there to find. Drawing angle lines through a bad detection is worse
+ * than drawing nothing: it looks authoritative and it is wrong. These are the
+ * checks a glance would apply — feet below head, sensible proportions, and a
+ * spine that is not lying on its side.
+ */
+export function poseLooksHuman(summary, frameHeightPx) {
+  if (!summary) return false;
+  const span = summary.ankleToNosePx;
+  if (!span || span < 40) return false;
+  if (frameHeightPx && span < frameHeightPx * 0.25) return false;
+  if (summary.ankles.y <= summary.head.y) return false;
+  // Hips belong between the shoulders and the feet.
+  if (!(summary.hips.y > summary.shoulders.y && summary.hips.y < summary.ankles.y)) return false;
+  // Shoulders look narrow down the line and wide face on, but never absurd.
+  if (summary.shoulderWidth < span * 0.06 || summary.shoulderWidth > span * 0.8) return false;
+  if (!Number.isFinite(summary.spineTiltDeg) || Math.abs(summary.spineTiltDeg) > 55) return false;
+  return true;
+}
+
+/**
  * Pixels per centimetre, from the golfer's stated height.
  * Ankle-to-nose is close to 0.90 of standing height for most adults, and both
  * points are reliably visible in a golf setup.

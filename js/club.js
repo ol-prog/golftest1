@@ -5,7 +5,7 @@
 // the golfer's centre and weight them towards the extremity. A continuity gate
 // stops the track jumping to a passing golfer or a flapping flag.
 
-import { diff } from './motion.js';
+import { diff, blobs, refineAround } from './motion.js';
 import { clamp, deg, fitLine, smooth } from './util.js';
 
 /**
@@ -36,109 +36,214 @@ export function trackClub(gray, w, h, from, to, threshold, body) {
   const track = [];
   let prev = null;
   let vel = { x: 0, y: 0 };
-  const maxJump = Math.max(12, Math.hypot(w, h) * 0.22);
+  const diagonal = Math.hypot(w, h);
+  const maxJump = diagonal * 0.2;
+  const baseTipRadius = Math.max(2.5, diagonal * 0.018);
+  const minBlob = Math.max(4, Math.round(w * h * 0.00012));
 
   for (let i = Math.max(1, from); i <= to; i++) {
-    const { mask, count } = diff(gray[i - 1], gray[i], w, h, threshold);
+    const { mask, mag, count } = diff(gray[i - 1], gray[i], w, h, threshold);
     if (count < 4) {
       track.push({ i, p: null, conf: 0 });
       prev = null;
+      vel = { x: 0, y: 0 };
       continue;
     }
 
-    // Pass 1: how far does the motion reach from the body?
-    let maxD = 0;
-    for (let y = 0, idx = 0; y < h; y++) {
-      const dy = y - body.y;
-      for (let x = 0; x < w; x++, idx++) {
-        if (!mask[idx]) continue;
-        const dx = x - body.x;
-        const d = dx * dx + dy * dy;
-        if (d > maxD) maxD = d;
-      }
-    }
-    maxD = Math.sqrt(maxD);
-    if (maxD < 4) {
+    // Group the motion, and for each group note the point furthest from the
+    // golfer. The club head is the tip of the moving mass, not its middle —
+    // averaging over the shaft is what used to pull the line inwards and make
+    // it wobble as more or less of the shaft came into view.
+    // Once the club is moving, hand the blob finder the direction of travel so
+    // it can pick the leading edge of the motion smear rather than either end
+    // of it at random — that ambiguity is what used to break the line through
+    // the downswing, where the club is fastest and the smear longest.
+    const speed = Math.hypot(vel.x, vel.y);
+    const dir = speed > 0.8 ? { x: vel.x / speed, y: vel.y / speed } : null;
+    const found = blobs(mask, w, h, minBlob, body, mag, dir);
+    if (!found.length) {
       track.push({ i, p: null, conf: 0 });
       continue;
     }
 
-    // Pass 2: weighted centroid of the outer shell of the motion, which is the
-    // club head (and the last stretch of shaft attached to it).
-    const shell = maxD * 0.72;
     const pred = prev ? { x: prev.x + vel.x, y: prev.y + vel.y } : null;
-    let sw = 0, sx = 0, sy = 0, sn = 0;
-    let gatedSw = 0, gatedSx = 0, gatedSy = 0, gatedN = 0;
-    let onEdge = 0;
-    for (let y = 0, idx = 0; y < h; y++) {
-      const dy = y - body.y;
-      for (let x = 0; x < w; x++, idx++) {
-        if (!mask[idx]) continue;
-        const dx = x - body.x;
-        const d = Math.hypot(dx, dy);
-        if (d < shell) continue;
-        if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) onEdge++;
-        const wgt = d * d;
-        sw += wgt; sx += x * wgt; sy += y * wgt; sn++;
-        if (pred) {
-          const jump = Math.hypot(x - pred.x, y - pred.y);
-          if (jump < maxJump) {
-            gatedSw += wgt; gatedSx += x * wgt; gatedSy += y * wgt; gatedN++;
-          }
-        }
+    let best = null;
+    let bestScore = -Infinity;
+    let offFrame = false;
+
+    for (const b of found) {
+      const tip = b.hasLead ? { x: b.leadX, y: b.leadY } : { x: b.farX, y: b.farY };
+      const tipOnEdge = tip.x <= 1 || tip.y <= 1 || tip.x >= w - 2 || tip.y >= h - 2;
+      // Reach from the body, and how hard the pixels moved. The club head wins
+      // on both counts against a swaying flag or a golfer in the next bay.
+      const strength = Math.log1p(b.weight / 255);
+      let score = b.farD * strength;
+      let jump = 0;
+      if (pred) {
+        jump = Math.hypot(tip.x - pred.x, tip.y - pred.y);
+        // Prefer continuity strongly, but never rule a blob out completely:
+        // a hard rejection is what makes a track drop the club and never
+        // recover it.
+        score *= jump > maxJump ? 0.05 : 1 + 2 * (1 - jump / maxJump);
+      }
+      if (tipOnEdge) score *= 0.25;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { b, tip, jump, tipOnEdge };
       }
     }
 
-    let p = null;
-    let conf = 0;
-    // When the club swings out of shot the outer edge of the motion is the
-    // frame border, and following it would draw a rectangle rather than a
-    // swing. Better to report nothing for those frames.
-    if (sn > 0 && onEdge / sn > 0.15) {
-      track.push({ i, p: null, conf: 0, offFrame: true });
-      prev = null;
-      vel = { x: 0, y: 0 };
+    if (!best) {
+      track.push({ i, p: null, conf: 0 });
       continue;
     }
-    if (gatedN >= 3) {
-      p = { x: gatedSx / gatedSw, y: gatedSy / gatedSw };
-      conf = clamp(gatedN / Math.max(1, sn), 0.25, 1);
-    } else if (sn >= 3) {
-      // Nothing near the prediction: accept the raw extremity but mark it down,
-      // and reset the velocity so one bad frame does not poison the next.
-      p = { x: sx / sw, y: sy / sw };
-      conf = pred ? 0.2 : 0.6;
-      vel = { x: 0, y: 0 };
-    }
+    if (best.tipOnEdge) offFrame = true;
 
-    if (p) {
-      if (prev) {
-        vel = { x: (p.x - prev.x) * 0.7 + vel.x * 0.3, y: (p.y - prev.y) * 0.7 + vel.y * 0.3 };
-      }
-      prev = p;
+    // The leading edge of the smear is where the club was when the shutter
+    // closed, not where it was during the frame. Averaging back over roughly
+    // half the distance it travelled recovers the middle of the exposure, which
+    // is what the frame's timestamp actually refers to.
+    const tipRadius = Math.max(baseTipRadius, speed * 0.5);
+    const refined = refineAround(mask, mag, w, h, best.tip.x, best.tip.y, tipRadius)
+      || best.tip;
+
+    // Confidence feeds the smoother's weighting, so it needs to mean something:
+    // how well the point continued the previous motion, and how much moved.
+    let conf = clamp(Math.log1p(best.b.weight / 255) / 6, 0.1, 1);
+    if (pred) conf *= clamp(1 - best.jump / maxJump, 0.05, 1);
+    if (offFrame) conf *= 0.3;
+
+    if (prev) {
+      vel = {
+        x: (refined.x - prev.x) * 0.6 + vel.x * 0.4,
+        y: (refined.y - prev.y) * 0.6 + vel.y * 0.4,
+      };
     }
-    track.push({ i, p, conf });
+    prev = refined;
+    track.push({ i, p: refined, conf, offFrame });
   }
   return track;
 }
 
-/** Fill short gaps and lightly smooth the track so angles are not noise-driven. */
-export function cleanTrack(track, smoothHalf = 1) {
-  const pts = track.map((t) => (t.p ? { ...t.p } : null));
-  // Linear interpolation across gaps of up to 4 frames.
-  for (let i = 0; i < pts.length; i++) {
-    if (pts[i]) continue;
-    let a = i - 1;
-    while (a >= 0 && !pts[a]) a--;
-    let b = i + 1;
-    while (b < pts.length && !pts[b]) b++;
-    if (a < 0 || b >= pts.length || b - a > 5) continue;
-    const t = (i - a) / (b - a);
-    pts[i] = { x: pts[a].x + (pts[b].x - pts[a].x) * t, y: pts[a].y + (pts[b].y - pts[a].y) * t };
+/**
+ * Turn raw detections into the single smooth arc a swing actually traces.
+ *
+ * A club head cannot teleport, so any detection that disagrees sharply with its
+ * neighbours is wrong rather than interesting. Each point is refitted from a
+ * local weighted quadratic, the points that disagree with that fit by more than
+ * a few robust deviations are thrown out, and the fit is repeated without them.
+ * Three passes is enough to shed the odd frame where the tracker latched onto a
+ * shadow, a second golfer, or the ball.
+ *
+ * Returns positions plus a per-point `ok` flag: where support runs out the
+ * answer is nothing at all, because a line drawn through a gap is a guess the
+ * viewer cannot tell from a measurement.
+ */
+export function smoothTrack(track, {
+  half = 3, iterations = 3, rejectAt = 2.5, absFloor = 3, maxHalf = 8,
+} = {}) {
+  const n = track.length;
+  const rawX = new Float64Array(n);
+  const rawY = new Float64Array(n);
+  const weight = new Float64Array(n);
+  let present = 0;
+  for (let i = 0; i < n; i++) {
+    const t = track[i];
+    if (t && t.p) {
+      rawX[i] = t.p.x;
+      rawY[i] = t.p.y;
+      weight[i] = Math.max(0.05, t.conf || 0.5);
+      present++;
+    }
   }
-  const xs = smooth(pts.map((p) => (p ? p.x : NaN)), smoothHalf);
-  const ys = smooth(pts.map((p) => (p ? p.y : NaN)), smoothHalf);
-  return pts.map((p, i) => (p && Number.isFinite(xs[i]) ? { x: xs[i], y: ys[i] } : null));
+
+  let outX = Float64Array.from(rawX);
+  let outY = Float64Array.from(rawY);
+  const valid = new Uint8Array(n);
+  // Never discard more than a fifth of what was found. Beyond that the fit is
+  // no longer correcting the data, it is replacing it.
+  const rejectionBudget = Math.floor(present * 0.2);
+  let rejected = 0;
+
+  for (let pass = 0; pass < iterations; pass++) {
+    const nextX = new Float64Array(n);
+    const nextY = new Float64Array(n);
+    valid.fill(0);
+    for (let i = 0; i < n; i++) {
+      // Start tight. Widen only where the track is sparse, so a short gap gets
+      // bridged by the arc either side of it while dense stretches stay
+      // faithful to their own frames.
+      let h = half;
+      let ts = [];
+      let xs = [];
+      let ys = [];
+      let ws = [];
+      let before = 0;
+      let after = 0;
+      for (;;) {
+        ts = []; xs = []; ys = []; ws = []; before = 0; after = 0;
+        for (let j = Math.max(0, i - h); j <= Math.min(n - 1, i + h); j++) {
+          if (weight[j] <= 0) continue;
+          ts.push(j - i); xs.push(rawX[j]); ys.push(rawY[j]); ws.push(weight[j]);
+          if (j < i) before++;
+          else if (j > i) after++;
+        }
+        if (ts.length >= 5 || h >= maxHalf) break;
+        h += 2;
+      }
+      // A quadratic through three points fits them exactly and means nothing,
+      // and a widened window must bracket the gap rather than run off the end
+      // of the track.
+      if (ts.length < 4) continue;
+      if (h > half && (before < 2 || after < 2)) continue;
+      const fx = quadFit(ts, xs, ws);
+      const fy = quadFit(ts, ys, ws);
+      if (!fx || !fy) continue;
+      nextX[i] = fx.value;
+      nextY[i] = fy.value;
+      valid[i] = 1;
+    }
+    outX = nextX;
+    outY = nextY;
+
+    if (pass === iterations - 1 || rejected >= rejectionBudget) break;
+
+    const residuals = [];
+    for (let i = 0; i < n; i++) {
+      if (!valid[i] || weight[i] <= 0) continue;
+      residuals.push({ i, r: Math.hypot(rawX[i] - outX[i], rawY[i] - outY[i]) });
+    }
+    if (residuals.length < 6) break;
+    const sorted = residuals.map((e) => e.r).sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const spread = sorted.map((r) => Math.abs(r - median)).sort((a, b) => a - b);
+    const mad = spread[Math.floor(spread.length / 2)] || 1e-6;
+    // The absolute floor is what stops a good track eating itself: when every
+    // point sits within a pixel of the curve the robust spread collapses, and a
+    // purely relative threshold then starts throwing away the places where the
+    // arc genuinely bends fastest.
+    const limit = Math.max(median + rejectAt * 1.4826 * mad, absFloor);
+    // Worst first, so the budget is spent on the points that deserve it.
+    residuals.sort((a, b) => b.r - a.r);
+    for (const { i, r } of residuals) {
+      if (rejected >= rejectionBudget) break;
+      if (r <= limit) break;
+      weight[i] = 0;
+      rejected++;
+    }
+  }
+
+  const points = [];
+  for (let i = 0; i < n; i++) {
+    points.push(valid[i] ? { x: outX[i], y: outY[i] } : null);
+  }
+  points.rejected = rejected;
+  return points;
+}
+
+/** Kept for callers that only want positions. */
+export function cleanTrack(track, smoothHalf = 3, absFloor = 3) {
+  return smoothTrack(track, { half: Math.max(2, smoothHalf), absFloor });
 }
 
 /** Frame-to-frame speed of the club head, in analysis pixels per second. */
@@ -191,27 +296,35 @@ function fitCircle(pts) {
 }
 
 /**
- * Least-squares quadratic through (t, v), returning the value and slope at
- * t = 0. Fitting a curve and taking its tangent is far steadier than measuring
- * the chord between two frames: at 240fps a club head still moves close to
- * twenty centimetres between one frame and the next.
+ * Weighted least-squares quadratic through (t, v), returning the fitted value
+ * and slope at t = 0. Fitting a curve and reading it at a point is far steadier
+ * than measuring between two samples: at 240fps a club head still moves close to
+ * twenty centimetres from one frame to the next.
  */
-function quadraticSlope(ts, vs) {
+function quadFit(ts, vs, ws) {
   const n = ts.length;
   if (n < 3) return null;
-  let s0 = n, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
   let b0 = 0, b1 = 0, b2 = 0;
   for (let i = 0; i < n; i++) {
-    const t = ts[i], v = vs[i];
+    const t = ts[i];
+    const v = vs[i];
+    const wt = ws ? ws[i] : 1;
+    if (wt <= 0) continue;
     const t2 = t * t;
-    s1 += t; s2 += t2; s3 += t2 * t; s4 += t2 * t2;
-    b0 += v; b1 += v * t; b2 += v * t2;
+    s0 += wt; s1 += wt * t; s2 += wt * t2; s3 += wt * t2 * t; s4 += wt * t2 * t2;
+    b0 += wt * v; b1 += wt * v * t; b2 += wt * v * t2;
   }
-  // Solve the 3x3 normal equations by Cramer's rule.
   const det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
   if (Math.abs(det) < 1e-12) return null;
+  const d0 = b0 * (s2 * s4 - s3 * s3) - s1 * (b1 * s4 - s3 * b2) + s2 * (b1 * s3 - s2 * b2);
   const d1 = s0 * (b1 * s4 - b2 * s3) - b0 * (s1 * s4 - s3 * s2) + s2 * (s1 * b2 - b1 * s2);
-  return { slope: d1 / det };
+  return { value: d0 / det, slope: d1 / det };
+}
+
+function quadraticSlope(ts, vs) {
+  const fit = quadFit(ts, vs, null);
+  return fit ? { slope: fit.slope } : null;
 }
 
 /**
@@ -380,9 +493,14 @@ export function deliveryMetrics(points, times, offset, atIndex, handed, framesFo
   // point in the window rather than the two ends, and it does not flatten the
   // delivery towards the average slope the way a wide polynomial fit does.
   const here = points[atIndex];
-  if (arc && here && arc.rms < arc.r * 0.04 && arc.r > 6) {
-    const rx = here.x - arc.cx;
-    const ry = here.y - arc.cy;
+  // Callers that measure the whole delivery pass in an arc fitted over it,
+  // which is better conditioned; on its own, fall back to fitting the window.
+  const localArc = arc || fitCircle(xs.map((x, i) => ({ x, y: ys[i] })));
+  const arcGood = Boolean(localArc) && localArc.rms < localArc.r * 0.04 && localArc.r > 6;
+  out.arcGood = arcGood;
+  if (arcGood && here) {
+    const rx = here.x - localArc.cx;
+    const ry = here.y - localArc.cy;
     const rn = Math.hypot(rx, ry) || 1;
     let tx = -ry / rn;
     let ty = rx / rn;
@@ -391,8 +509,8 @@ export function deliveryMetrics(points, times, offset, atIndex, handed, framesFo
     const speed = Math.hypot(vx, vy);
     vx = tx * speed;
     vy = ty * speed;
-    out.arcRadiusPx = arc.r;
-    out.arcFitRms = arc.rms;
+    out.arcRadiusPx = localArc.r;
+    out.arcFitRms = localArc.rms;
   }
 
   const sign = handed === 'left' ? -1 : 1;
@@ -407,6 +525,14 @@ export function deliveryMetrics(points, times, offset, atIndex, handed, framesFo
     : null;
   out.impactSpeedPxPerSec = Math.hypot(vx, vy);
   out.strikeIndex = atIndex;
+  // How the club arrives is read off the fitted arc. Without a clean arc there
+  // is no tangent worth quoting: the same swing would come back as four degrees
+  // descending on one reading and twenty ascending on the next, and a number
+  // that unstable is worse than none.
+  if (!arcGood) {
+    out.attackAngleDeg = null;
+    out.impactDirectionDeg = null;
+  }
   return out;
 }
 

@@ -14,8 +14,8 @@ import {
   estimateBodyCentre, trackClub, cleanTrack, clubMetrics,
   deliveryMetrics, framesForFactory, strikeIndexFromBall,
 } from './club.js';
-import { findBallAtRest, trackBall, launchFromPath } from './ball.js';
-import { loadPose, detectOn, poseSummary, bodyMetrics, pixelScale } from './pose.js';
+import { findBallAtRest, trackBall, launchFromPath, flightCurve } from './ball.js';
+import { loadPose, detectOn, poseSummary, bodyMetrics, pixelScale, poseLooksHuman } from './pose.js';
 import { clamp, nextTick } from './util.js';
 
 const MPH_PER_MS = 2.23694;
@@ -94,6 +94,7 @@ export async function analyseSwing(file, opts) {
   // The club the golfer selected, kept apart from the club *measurements*
   // stored on report.club.
   const notes = [];
+  let deliveryUnmeasurable = false;
   const report = {
     ts: Date.now(), view, handed, clubName: club, heightCm,
     notes, warnings: [],
@@ -214,13 +215,19 @@ export async function analyseSwing(file, opts) {
     if (landmarker) {
       for (const key of poseKeys) {
         await poseFrame(video, fine.times[ev[key]], poseCanvas, poseCtx);
-        at[key] = poseSummary(detectOn(landmarker, poseCanvas));
+        const summary = poseSummary(detectOn(landmarker, poseCanvas));
+        // Keep only detections that look like a golfer. A bad one drawn as
+        // angle lines reads as a measurement rather than as a mistake.
+        at[key] = poseLooksHuman(summary, poseCanvas.height) ? summary : null;
         await nextTick();
       }
     } else {
       notes.push('Body tracking could not load, so this report covers club and ball only.');
     }
     report.poseOk = Boolean(at.address);
+    if (landmarker && !report.poseOk) {
+      notes.push('Your body could not be picked out clearly enough to measure angles from. Getting your whole body in shot, with a bit more light, is usually all it takes.');
+    }
 
     // Normalised-units-per-centimetre, from the golfer's height at address.
     let unitsPerCm = null;
@@ -257,7 +264,13 @@ export async function analyseSwing(file, opts) {
     const rawTrack = trackClub(fine.gray, W, H, trackFrom, trackTo, thr, bodyCentre);
     // More frames a second means more jitter to average away, and a centred
     // average costs no lag.
-    const points = cleanTrack(rawTrack, clamp(Math.round(effectiveFps / 120), 1, 3));
+    // The rejection floor is in analysis pixels: about one and a half percent of
+    // the frame, comfortably above the tracker's own noise and well below a
+    // genuine mis-lock onto something that is not the club.
+    const points = cleanTrack(rawTrack, clamp(Math.round(effectiveFps / 120), 1, 3), W * 0.015);
+    report.debug.rawTrack = rawTrack.map((t) => (t.p
+      ? [Number((t.p.x / W).toFixed(4)), Number((t.p.y / W).toFixed(4)), Number(t.conf.toFixed(2))]
+      : null));
     const offFrameFraction = rawTrack.length
       ? rawTrack.filter((t) => t.offFrame).length / rawTrack.length
       : 0;
@@ -331,48 +344,16 @@ export async function analyseSwing(file, opts) {
     if (!deliveryMeasurable) {
       cm.attackAngleDeg = null;
       cm.impactDirectionDeg = null;
+      deliveryUnmeasurable = true;
       report.notes.push(
         `At ${Math.round(effectiveFps)} frames a second the club head moves too far between frames to measure how it arrives at the ball. Tempo, plane and body movement are all still solid; angle of attack and club path need slo-mo.`,
       );
-    }
-
-    report.club = {
-      deliveryMeasurable,
-      backswingPlaneDeg: cm.backswingPlaneDeg,
-      downswingPlaneDeg: cm.downswingPlaneDeg,
-      planeShiftDeg: cm.planeShiftDeg,
-      planeFitQuality: cm.planeFitQuality,
-      impactDirectionDeg: cm.impactDirectionDeg,
-      attackAngleDeg: cm.attackAngleDeg,
-      trackCoverage: cm.trackCoverage,
-      planeDebug: cm.planeDebug,
-      deliveryPoints: cm.deliveryPoints,
-      strikeAnchoredToBall: strikeIndex != null,
-      offFrameFraction,
-      arcRadiusPx: cm.arc ? cm.arc.r : null,
-      arcFitRms: cm.arc ? cm.arc.rms : null,
-      arcUsed: cm.arcRadiusPx != null,
-    };
-    // Club speed: 2D and therefore an under-estimate, worst of all down the
-    // line where the head is partly moving towards the camera.
-    if (unitsPerCm && cm.peakSpeedPxPerSec > 0) {
-      const unitsPerSec = (cm.peakSpeedPxPerSec / W) * factor;
-      const msPerSec = unitsPerSec / unitsPerCm / 100;
-      report.club.speedMph = msPerSec * MPH_PER_MS;
-      // Scales linearly with the slow-motion factor, so keep the unit value.
-      report.club.speedMphPerFactor = report.club.speedMph / factor;
-      report.club.speedIsLowerBound = view !== 'faceon';
     }
 
     // --- Ball flight --------------------------------------------------------
     onProgress('Following the ball', 0.84);
     if (rest) {
       report.ball.rest = { x: rest.x / W, y: rest.y / W, confidence: rest.confidence };
-      // Low point of the arc relative to the ball tells ball-first vs fat.
-      if (lowPoint && unitsPerCm) {
-        const offsetUnits = (targetSign * (lowPoint.x - rest.x)) / W;
-        report.club.lowPointOffsetCm = offsetUnits / unitsPerCm;
-      }
       if (effectiveFps >= 90) {
         const path = trackBall(fine.gray, W, H, trackFrom + (strikeIndex ?? idx.impact), rest, thr, 30);
         const launch = launchFromPath(
@@ -390,6 +371,13 @@ export async function analyseSwing(file, opts) {
           report.ball.path = launch.points.map((p) => ({
             x: p.x / W, y: p.y / W, t: fine.times[p.i] ?? null,
           }));
+          // The fitted parabola, carried on to the edge of frame — the line the
+          // tracer actually draws.
+          const timed = launch.points.map((p) => ({ x: p.x, y: p.y, t: fine.times[p.i] }));
+          const curve = flightCurve(timed, W, H);
+          if (curve) {
+            report.ball.flight = curve.map((p) => ({ x: p.x / W, y: p.y / W, t: p.t }));
+          }
         } else {
           report.ball.reason = launch.reason;
         }
@@ -400,6 +388,106 @@ export async function analyseSwing(file, opts) {
       report.ball.reason = 'The ball could not be picked out against the background.';
     }
 
+    // --- Keep the club trace off the ball -----------------------------------
+    // After impact the ball leaves from exactly where the club head is, fast and
+    // in a straight line — the one thing a continuity tracker will happily
+    // follow instead of the club. Now that the flight is known, drop any club
+    // detection sitting on it and re-smooth what is left.
+    let tracePoints = points;
+    let ballConfusionsRemoved = 0;
+    if (report.ball.flight && report.ball.flight.length > 1 && strikeIndex != null) {
+      const flightPx = report.ball.flight.map((p) => ({ x: p.x * W, y: p.y * W }));
+      // Distance from a point to the flight path itself, at any point along it.
+      // Matching by timestamp instead fails whenever the ball is not picked up
+      // for a frame or two after impact, which is exactly when the tracker is
+      // most likely to have jumped onto it.
+      const distanceToFlight = (p) => {
+        let best = Infinity;
+        for (let k = 1; k < flightPx.length; k++) {
+          const a = flightPx[k - 1];
+          const b = flightPx[k];
+          const vx = b.x - a.x;
+          const vy = b.y - a.y;
+          const len2 = vx * vx + vy * vy;
+          const u = len2 > 1e-9
+            ? clamp(((p.x - a.x) * vx + (p.y - a.y) * vy) / len2, 0, 1)
+            : 0;
+          const d = Math.hypot(p.x - (a.x + u * vx), p.y - (a.y + u * vy));
+          if (d < best) best = d;
+        }
+        return best;
+      };
+      const clearFrom = strikeIndex + Math.max(2, framesFor(0.01));
+      const nearBall = W * 0.03;
+      let dropped = 0;
+      const filtered = rawTrack.map((entry, i) => {
+        if (i < clearFrom || !entry.p) return entry;
+        if (distanceToFlight(entry.p) < nearBall) {
+          dropped++;
+          return { ...entry, p: null, conf: 0 };
+        }
+        return entry;
+      });
+      if (dropped > 0) {
+        tracePoints = cleanTrack(filtered, clamp(Math.round(effectiveFps / 120), 1, 3), W * 0.015);
+        ballConfusionsRemoved = dropped;
+      }
+    }
+
+    // --- Club measurements, from the cleaned track --------------------------
+    // Measuring off the same points the tracer draws matters: a few frames
+    // where the tracker rode the ball out of the picture drag the fitted swing
+    // arc with them, and every delivery number is read off that arc.
+    const cleanCm = clubMetrics(tracePoints, fine.times, trackFrom, idx, handed, factor);
+    if (deliveryUnmeasurable) {
+      cleanCm.attackAngleDeg = null;
+      cleanCm.impactDirectionDeg = null;
+    } else if (strikeIndex != null) {
+      Object.assign(cleanCm, deliveryMetrics(
+        tracePoints, fine.times, trackFrom, strikeIndex, handed, framesFor, cleanCm.arc,
+      ));
+    }
+
+    report.club = {
+      deliveryMeasurable,
+      backswingPlaneDeg: cleanCm.backswingPlaneDeg,
+      downswingPlaneDeg: cleanCm.downswingPlaneDeg,
+      planeShiftDeg: cleanCm.planeShiftDeg,
+      planeFitQuality: cleanCm.planeFitQuality,
+      impactDirectionDeg: cleanCm.impactDirectionDeg,
+      attackAngleDeg: cleanCm.attackAngleDeg,
+      trackCoverage: cleanCm.trackCoverage,
+      planeDebug: cleanCm.planeDebug,
+      deliveryPoints: cleanCm.deliveryPoints,
+      strikeAnchoredToBall: strikeIndex != null,
+      offFrameFraction,
+      arcRadiusPx: cleanCm.arc ? cleanCm.arc.r : null,
+      arcFitRms: cleanCm.arc ? cleanCm.arc.rms : null,
+      arcUsed: Boolean(cleanCm.arcGood),
+      ballConfusionsRemoved,
+    };
+    // Club speed: 2D and therefore an under-estimate, worst of all down the
+    // line where the head is partly moving towards the camera.
+    if (unitsPerCm && cleanCm.peakSpeedPxPerSec > 0) {
+      const unitsPerSec = (cleanCm.peakSpeedPxPerSec / W) * factor;
+      const msPerSec = unitsPerSec / unitsPerCm / 100;
+      report.club.speedMph = msPerSec * MPH_PER_MS;
+      // Scales linearly with the slow-motion factor, so keep the unit value.
+      report.club.speedMphPerFactor = report.club.speedMph / factor;
+      report.club.speedIsLowerBound = view !== 'faceon';
+    }
+
+
+    if (deliveryMeasurable && cleanCm.arcGood === false) {
+      report.notes.push('The club head arc through impact was too ragged to read an angle of attack or a club path off. Tempo, plane and the rest of the report are unaffected.');
+    }
+
+    if (cleanCm.lowPoint && rest && unitsPerCm) {
+      // Where the club bottoms out relative to the ball: ball-first or fat.
+      const offsetUnits = (targetSign * (cleanCm.lowPoint.x - rest.x)) / W;
+      report.club.lowPointOffsetCm = offsetUnits / unitsPerCm;
+    }
+
     // --- Trace and stills ---------------------------------------------------
     onProgress('Drawing the swing', 0.9);
     report.trace = {
@@ -407,7 +495,7 @@ export async function analyseSwing(file, opts) {
       // Clip time of the first tracked frame, so the tracer can line the path up
       // with playback.
       t0: fine.times[trackFrom],
-      points: points.map((p, i) => (p ? { x: p.x / W, y: p.y / W, i } : null)),
+      points: tracePoints.map((p, i) => (p ? { x: p.x / W, y: p.y / W, i } : null)),
       body: { x: bodyCentre.x / W, y: bodyCentre.y / W },
       idx,
       times: Array.from(fine.times.slice(trackFrom, trackTo + 1)).map((t) => t - fine.times[trackFrom]),

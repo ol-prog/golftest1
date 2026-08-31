@@ -271,8 +271,9 @@ function buildTiles(r) {
         d > 2 ? 'good' : d < -2 ? 'watch' : ''));
     }
     if (Number.isFinite(c.attackAngleDeg)) {
-      out.push(tile('Attack angle', `${fmt1(c.attackAngleDeg)}°`,
-        c.attackAngleDeg < 0 ? 'Hitting down on it.' : 'Hitting up on it.'));
+      const a = c.attackAngleDeg;
+      out.push(tile('Attack angle', `${fmt1(a)}°`,
+        a < -2 ? 'Hitting down on it.' : a > 2 ? 'Hitting up on it.' : 'Level at the ball.'));
     }
     if (Number.isFinite(c.speedMph)) {
       out.push(tile('Club speed', `${fmt0(c.speedMph)} mph`,
@@ -400,10 +401,17 @@ function drawReportCanvases() {
   const width = $('#traceCanvas').parentElement.clientWidth - 28;
   const aspect = r.trace?.aspect || (r.videoHeight / r.videoWidth) || 0.5625;
   const ctx = sizeCanvasTo($('#traceCanvas'), aspect, Math.max(200, width));
+  const wantPose = $('#poseToggle').checked;
+  const havePose = Boolean(r.poseFrames && r.poseFrames[state.frame]);
   drawTrace(ctx, state.stillImages[state.frame], r, {
     phase: state.phase,
-    showPose: $('#poseToggle').checked ? state.frame : null,
+    showPose: wantPose && havePose ? state.frame : null,
   });
+  const poseNote = $('#poseNote');
+  poseNote.hidden = !wantPose || havePose;
+  if (wantPose && !havePose) {
+    poseNote.textContent = `Your body could not be picked out in the ${state.frame} frame, so there are no angles to draw on it. That usually means part of you was out of shot or motion-blurred.`;
+  }
   drawEnergy($('#energyCanvas'), r, Math.max(200, width));
 }
 
