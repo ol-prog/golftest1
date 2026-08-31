@@ -237,7 +237,9 @@ input[type="number"] { width: 84px; text-align: right; }
 #traceCanvas, #energyCanvas, #trendSpark { display: block; width: 100%; border-radius: 10px; background: var(--bg-sunken); }
 #traceCanvas { margin-bottom: 10px; }
 .frame-tabs { margin-bottom: 6px; }
-#clipVideo { width: 100%; border-radius: 10px; background: #000; margin-bottom: 10px; }
+.clip-stage { position: relative; line-height: 0; margin-bottom: 10px; }
+#clipVideo { width: 100%; display: block; border-radius: 10px; background: #000; }
+#tracerCanvas { position: absolute; left: 0; top: 0; pointer-events: none; border-radius: 10px; }
 .jump-row { display: flex; gap: 6px; margin-bottom: 8px; }
 .jump-row button {
   flex: 1; min-height: 40px; border-radius: 9px; border: 1px solid var(--line);

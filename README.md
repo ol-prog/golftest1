@@ -75,6 +75,27 @@ start.
 
 ---
 
+## The swing tracer
+
+Play the clip back and a line draws itself along your club head as it goes —
+blue through the backswing, orange coming down, red through the finish, with the
+ball flight in green dashes after impact. The path is not being detected live;
+it was measured during analysis, so the line is exactly the path the numbers
+were taken from. If the tracer does not follow your club head, that is your
+signal to distrust the plane and path figures on that shot.
+
+Quarter and half speed are there because a downswing is a quarter of a second
+and you cannot see a transition at full speed. **Replay** jumps back to address
+rather than to the start of the file, which matters on a slow-motion clip where
+the swing might not start for ten seconds.
+
+The tracer needs the clip itself, so clips are kept on the phone. Slow-motion
+footage is large — a 1080p 240fps clip runs to tens of megabytes — so when
+storage starts filling up the app drops the video from the oldest shots first
+and tells you it did. The measurements and key frames for those shots stay.
+
+---
+
 ## What the numbers mean, and how much to trust them
 
 Everything here is measured from a flat picture taken with one camera. That
@@ -130,6 +151,7 @@ All in vanilla JavaScript, no build step, no framework.
 | `js/analyse.js` | The pipeline, plus the plausibility gate on every real-world figure. |
 | `js/coach.js` | Turns measurements into plain English. Rule-based and offline. |
 | `js/capture.js` | Camera, framing guide, and the three recording modes. |
+| `js/tracer.js` | Draws the club-head path over the clip in step with playback. |
 
 Two details worth knowing:
 

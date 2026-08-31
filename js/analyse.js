@@ -374,7 +374,7 @@ export async function analyseSwing(file, opts) {
         report.club.lowPointOffsetCm = offsetUnits / unitsPerCm;
       }
       if (effectiveFps >= 90) {
-        const path = trackBall(fine.gray, W, H, trackFrom + (strikeIndex ?? idx.impact), rest, thr, 12);
+        const path = trackBall(fine.gray, W, H, trackFrom + (strikeIndex ?? idx.impact), rest, thr, 30);
         const launch = launchFromPath(
           path.map((p) => ({ ...p })), view, handed, effectiveFps,
           unitsPerCm ? unitsPerCm * W : null,
@@ -385,7 +385,11 @@ export async function analyseSwing(file, opts) {
           report.ball.startLineDeg = launch.startLineDeg ?? null;
           report.ball.speedMph = launch.ballSpeedMph ?? null;
           report.ball.fit = launch.r2;
-          report.ball.path = launch.points.map((p) => ({ x: p.x / W, y: p.y / W }));
+          // Times come along so the tracer can draw the flight in step with
+          // the video rather than all at once.
+          report.ball.path = launch.points.map((p) => ({
+            x: p.x / W, y: p.y / W, t: fine.times[p.i] ?? null,
+          }));
         } else {
           report.ball.reason = launch.reason;
         }
@@ -400,6 +404,9 @@ export async function analyseSwing(file, opts) {
     onProgress('Drawing the swing', 0.9);
     report.trace = {
       aspect: H / W,
+      // Clip time of the first tracked frame, so the tracer can line the path up
+      // with playback.
+      t0: fine.times[trackFrom],
       points: points.map((p, i) => (p ? { x: p.x / W, y: p.y / W, i } : null)),
       body: { x: bodyCentre.x / W, y: bodyCentre.y / W },
       idx,

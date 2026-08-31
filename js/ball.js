@@ -53,7 +53,7 @@ export function findBallAtRest(grayPre, grayPost, w, h, near, threshold, searchR
  * Follow the ball for the first few frames after impact.
  * Returns the sampled positions, which the caller turns into a launch vector.
  */
-export function trackBall(gray, w, h, impactIdx, origin, threshold, maxFrames = 10) {
+export function trackBall(gray, w, h, impactIdx, origin, threshold, maxFrames = 30) {
   const path = [{ x: origin.x, y: origin.y, i: impactIdx }];
   let prev = { x: origin.x, y: origin.y };
   let dir = null;
@@ -97,19 +97,23 @@ export function trackBall(gray, w, h, impactIdx, origin, threshold, maxFrames = 
  * `angle` is the camera view: from face-on we read a launch angle above the
  * horizontal; from down-the-line we read a start line left or right of vertical.
  */
-export function launchFromPath(path, view, handed, effectiveFps, pxPerCm) {
+export function launchFromPath(path, view, handed, effectiveFps, pxPerCm, measureCount = 10) {
   if (path.length < 3) {
     return { ok: false, reason: 'The ball moved out of frame too quickly to measure.' };
   }
-  const fit = fitLine(path.map((p) => ({ x: p.x, y: p.y })));
+  // Measure from the first stretch of flight only. Following the ball further
+  // makes a better-looking tracer, but gravity has started bending the flight by
+  // then and would drag the launch angle down.
+  const measured = path.slice(0, Math.max(3, measureCount));
+  const fit = fitLine(measured.map((p) => ({ x: p.x, y: p.y })));
   if (!fit || fit.r2 < 0.9) {
     return { ok: false, reason: 'The ball flight was too short to measure a reliable line.' };
   }
   // Orient the fitted direction along actual travel.
   let dx = fit.dirX;
   let dy = fit.dirY;
-  const travelX = path[path.length - 1].x - path[0].x;
-  const travelY = path[path.length - 1].y - path[0].y;
+  const travelX = measured[measured.length - 1].x - measured[0].x;
+  const travelY = measured[measured.length - 1].y - measured[0].y;
   if (dx * travelX + dy * travelY < 0) { dx = -dx; dy = -dy; }
 
   const out = { ok: true, points: path, r2: fit.r2 };
@@ -125,8 +129,8 @@ export function launchFromPath(path, view, handed, effectiveFps, pxPerCm) {
 
   // Ball speed, if we know both the scale and the real frame interval.
   if (pxPerCm && effectiveFps) {
-    const first = path[0];
-    const last = path[path.length - 1];
+    const first = measured[0];
+    const last = measured[measured.length - 1];
     const frames = last.i - first.i;
     if (frames > 0) {
       const pxPerFrame = Math.hypot(last.x - first.x, last.y - first.y) / frames;

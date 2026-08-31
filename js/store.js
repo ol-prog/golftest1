@@ -6,8 +6,13 @@ const DB_NAME = 'golf-swing-analyser';
 const DB_VERSION = 1;
 const STORE = 'shots';
 
-/** Keep a clip only if it is small enough not to fill the phone up. */
-export const MAX_STORED_CLIP_BYTES = 60 * 1024 * 1024;
+/**
+ * Keep a clip unless it is enormous. Slow-motion footage is the whole point of
+ * this app and a 1080p 240fps clip runs to tens of megabytes, so the cap has to
+ * clear that comfortably; `pruneClips` handles the total rather than the cap
+ * doing it one file at a time.
+ */
+export const MAX_STORED_CLIP_BYTES = 220 * 1024 * 1024;
 
 let dbPromise = null;
 
@@ -80,6 +85,35 @@ export async function deleteShot(id) {
 
 export async function clearShots() {
   return tx('readwrite', (s) => s.clear());
+}
+
+/**
+ * Drop the video from the oldest shots until storage is comfortable again,
+ * keeping their measurements and key frames. Losing the oldest clip of the day
+ * beats a save failing outright halfway through a session.
+ *
+ * Returns how many clips were dropped.
+ */
+export async function pruneClips({ keepNewest = 6 } = {}) {
+  const est = await storageEstimate();
+  if (!est || !est.quota || !est.usage) return 0;
+  const ceiling = est.quota * 0.7;
+  if (est.usage < ceiling) return 0;
+
+  const shots = await listShots();          // newest first
+  let freed = 0;
+  let dropped = 0;
+  const target = est.usage - ceiling;
+  // Oldest first, and never touch the most recent few.
+  for (let i = shots.length - 1; i >= keepNewest; i--) {
+    const shot = shots[i];
+    if (!shot.clip) continue;
+    freed += shot.clip.size || 0;
+    await saveShot({ ...shot, clip: null, clipPruned: true });
+    dropped++;
+    if (freed >= target) break;
+  }
+  return dropped;
 }
 
 /** Rough usage figure for the settings screen. */

@@ -188,9 +188,21 @@
     <p class="muted small">Blue is the backswing, orange the downswing, red the follow-through. If the traced line does not follow your club head, treat the plane and path numbers below with suspicion.</p>
   </div>
 
-  <div class="card" id="clipCard" hidden>
-    <div class="section-head tight"><h2>Clip</h2></div>
-    <video id="clipVideo" playsinline controls></video>
+  <div class="card" id="clipCard">
+    <div class="section-head tight">
+      <h2>Swing tracer</h2>
+      <button class="text-btn" id="replayBtn">Replay</button>
+    </div>
+    <div id="clipMissing" class="muted small" hidden></div>
+    <div class="clip-stage" id="clipStage">
+      <video id="clipVideo" playsinline controls></video>
+      <canvas id="tracerCanvas"></canvas>
+    </div>
+    <div class="jump-row" id="speedRow">
+      <button data-rate="0.25">¼ speed</button>
+      <button data-rate="0.5">½ speed</button>
+      <button data-rate="1" class="on">Full speed</button>
+    </div>
     <div class="jump-row" id="jumpRow">
       <button data-jump="address">Address</button>
       <button data-jump="top">Top</button>
@@ -201,6 +213,11 @@
       <button id="framePrev">◀ Frame</button>
       <button id="frameNext">Frame ▶</button>
     </div>
+    <label class="check inline">
+      <input type="checkbox" id="tracerToggle" checked>
+      <span>Draw the tracer</span>
+    </label>
+    <p class="muted small">The line follows your club head as the clip plays — blue going back, orange coming down, red through the finish. Green dashes are the ball. Quarter speed is where you can actually see the transition.</p>
   </div>
 
   <div class="card">

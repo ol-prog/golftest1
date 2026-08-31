@@ -5,9 +5,10 @@ import { analyseSwing } from './analyse.js';
 import { coachReport } from './coach.js';
 import { drawTrace, drawEnergy, drawSparkline, sizeCanvasTo } from './overlay.js';
 import { Capture, captureSupported } from './capture.js';
+import { Tracer } from './tracer.js';
 import {
   saveShot, listShots, getShot, deleteShot, clearShots,
-  storageEstimate, requestPersistence, MAX_STORED_CLIP_BYTES, newId,
+  storageEstimate, requestPersistence, pruneClips, MAX_STORED_CLIP_BYTES, newId,
 } from './store.js';
 
 const state = {
@@ -22,6 +23,7 @@ const state = {
   frame: 'address',
   phase: 'all',
   capture: null,
+  tracer: null,
   mode: getSettings().captureMode,
   cancelled: false,
 };
@@ -147,9 +149,14 @@ async function runAnalysis(blob, view) {
 
     const keepClip = s.keepClips && blob.size <= MAX_STORED_CLIP_BYTES;
     const shot = { ...report, id: newId(), clip: keepClip ? blob : null, clipType: blob.type };
+    // Make room before writing, so a long session of slow-motion clips degrades
+    // by forgetting the oldest video rather than by failing to save.
+    const dropped = await pruneClips().catch(() => 0);
     await saveShot(shot).catch(() => toast('Could not save this shot locally, but here it is.'));
     if (!keepClip && s.keepClips) {
       toast('Clip was too large to keep, so only the analysis was saved.');
+    } else if (dropped > 0) {
+      toast(`Storage was filling up, so the video from ${dropped} older shot${dropped > 1 ? 's was' : ' was'} dropped. Their measurements are still there.`, 4200);
     }
     state.history = ['range'];
     showReport(shot);
@@ -165,6 +172,7 @@ async function runAnalysis(blob, view) {
 /* ── Report ──────────────────────────────────────────────────────── */
 
 function releaseUrls() {
+  if (state.tracer) state.tracer.stop();
   for (const url of Object.values(state.stillUrls)) URL.revokeObjectURL(url);
   state.stillUrls = {};
   state.stillImages = {};
@@ -400,17 +408,63 @@ function drawReportCanvases() {
 }
 
 function renderClip(shot) {
-  const card = $('#clipCard');
   const video = $('#clipVideo');
+  const stage = $('#clipStage');
+  const missing = $('#clipMissing');
+  const controls = ['#speedRow', '#jumpRow', '#replayBtn'];
+
+  if (state.tracer) state.tracer.stop();
   if (!shot.clip) {
-    card.hidden = true;
+    // The analysis survives even when the clip does not, so say why rather
+    // than quietly dropping the whole section.
+    stage.hidden = true;
+    missing.hidden = false;
+    missing.textContent = shot.clipPruned
+      ? 'The video for this shot was cleared to make room for newer ones. Its measurements are all still here.'
+      : getSettings().keepClips
+        ? 'This clip was too large to keep on the phone, so there is nothing left to play. The measurements below are all from it.'
+        : 'Clips are not being kept on this phone, so there is nothing to play. Turn on “Keep clips” in settings to get the tracer.';
+    controls.forEach((sel) => { $(sel).style.display = 'none'; });
     video.removeAttribute('src');
     return;
   }
-  card.hidden = false;
+
+  stage.hidden = false;
+  missing.hidden = true;
+  controls.forEach((sel) => { $(sel).style.display = ''; });
   state.clipUrl = URL.createObjectURL(shot.clip);
   video.src = state.clipUrl;
+  video.playbackRate = 1;
+  $$('#speedRow button').forEach((b) => b.classList.toggle('on', b.dataset.rate === '1'));
   video.load();
+
+  if (!state.tracer) state.tracer = new Tracer(video, $('#tracerCanvas'));
+  const tracer = state.tracer;
+  tracer.setEnabled($('#tracerToggle').checked);
+
+  const attach = () => {
+    tracer.setReport(shot);
+    // Start at address rather than at whatever dead air precedes it.
+    const start = shot.events && Number.isFinite(shot.events.address)
+      ? Math.max(0, shot.events.address - 0.15)
+      : 0;
+    if (video.duration && start < video.duration) video.currentTime = start;
+    tracer.draw();
+  };
+  if (video.readyState >= 1) attach();
+  else video.addEventListener('loadedmetadata', attach, { once: true });
+}
+
+/** Play the clip from just before address. */
+function replayClip() {
+  const video = $('#clipVideo');
+  const r = state.report;
+  if (!video.src || !video.duration) return;
+  const start = r && r.events && Number.isFinite(r.events.address)
+    ? Math.max(0, r.events.address - 0.15)
+    : 0;
+  video.currentTime = Math.min(start, video.duration - 0.05);
+  video.play().catch(() => {});
 }
 
 /** Recompute the numbers that depend on the slow-motion factor. */
@@ -649,6 +703,24 @@ function bindEvents() {
   $('#framePrev').addEventListener('click', () => stepFrame(-1));
   $('#frameNext').addEventListener('click', () => stepFrame(1));
 
+  // Tracer: the redraw loop only runs while the clip is actually playing;
+  // everywhere else a single redraw on the new frame is enough.
+  const clip = $('#clipVideo');
+  clip.addEventListener('play', () => state.tracer && state.tracer.start());
+  clip.addEventListener('pause', () => state.tracer && state.tracer.stop());
+  clip.addEventListener('ended', () => state.tracer && state.tracer.stop());
+  for (const ev of ['seeked', 'loadeddata', 'timeupdate']) {
+    clip.addEventListener(ev, () => state.tracer && state.tracer.draw());
+  }
+  $('#tracerToggle').addEventListener('change', (e) => {
+    if (state.tracer) state.tracer.setEnabled(e.target.checked);
+  });
+  $('#replayBtn').addEventListener('click', replayClip);
+  $$('#speedRow button').forEach((b) => b.addEventListener('click', () => {
+    clip.playbackRate = Number(b.dataset.rate);
+    $$('#speedRow button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+
   $('#anotherBtn').addEventListener('click', () => { releaseUrls(); go('range', { replace: true }); refreshSession(); });
   $('#deleteShotBtn').addEventListener('click', async () => {
     if (!state.shotId) return;
@@ -694,6 +766,7 @@ function registerServiceWorker() {
   });
 }
 
+requestPersistence().catch(() => {});
 bindSettings();
 bindEvents();
 setMode(getSettings().captureMode);
