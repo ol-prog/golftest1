@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Swing Lab — golf swing analyser</title>
+<meta name="description" content="Film or upload a golf swing and get tempo, swing plane, club path, strike and body movement analysed on your phone.">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Swing Lab">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body data-screen="range">
+
+<header class="topbar">
+  <button class="icon-btn back-btn" id="backBtn" hidden aria-label="Back">‹</button>
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Swing Lab</span>
+  </div>
+  <button class="icon-btn" id="settingsBtn" aria-label="Settings">⚙</button>
+</header>
+
+<main>
+
+<!-- ───────────────────────── Range (home) ───────────────────────── -->
+<section class="screen" id="screen-range">
+  <div class="hero">
+    <p class="eyebrow">Driving range</p>
+    <h1>Analyse a swing</h1>
+    <p class="lede">Film here hands-free, or shoot in the Camera app and upload. <strong>Slo-mo gives far better results</strong> — it is the difference between measuring ball flight and not.</p>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="openCameraBtn">
+      <span class="btn-title">Film a swing</span>
+      <span class="btn-sub">Hands-free, timer, or tap</span>
+    </button>
+    <label class="btn btn-secondary" for="fileInput">
+      <span class="btn-title">Upload a clip</span>
+      <span class="btn-sub">From your camera roll</span>
+    </label>
+    <input type="file" id="fileInput" accept="video/*" hidden>
+  </div>
+
+  <div class="quick-settings">
+    <label class="field">
+      <span>Club</span>
+      <select id="clubSelect">
+        <option>Driver</option><option>3 wood</option><option>5 wood</option>
+        <option>4 hybrid</option><option>5 iron</option><option>6 iron</option>
+        <option selected>7 iron</option><option>8 iron</option><option>9 iron</option>
+        <option>Pitching wedge</option><option>Gap wedge</option><option>Sand wedge</option>
+        <option>Lob wedge</option><option>Putter</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Camera angle</span>
+      <select id="angleSelect">
+        <option value="ask">Ask me each time</option>
+        <option value="dtl">Down the line</option>
+        <option value="faceon">Face on</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="section-head">
+    <h2>This session</h2>
+    <button class="text-btn" id="clearSessionBtn" hidden>Clear</button>
+  </div>
+  <div id="trendCard" class="card trend" hidden>
+    <div class="trend-head">
+      <span class="trend-label">Tempo trend</span>
+      <span class="trend-value" id="trendValue"></span>
+    </div>
+    <canvas id="trendSpark"></canvas>
+    <p class="muted small">Dotted line is the 3:1 benchmark most tour swings sit on.</p>
+  </div>
+  <div id="shotList" class="shot-list"></div>
+  <p class="empty muted" id="emptyState">No shots yet. Film one, or upload a clip from your camera roll.</p>
+</section>
+
+<!-- ───────────────────────── Camera ───────────────────────── -->
+<section class="screen" id="screen-camera">
+  <div class="camera-wrap">
+    <video id="preview" playsinline muted></video>
+    <svg class="guide" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <rect class="guide-box" x="26" y="8" width="48" height="84" />
+      <line class="guide-line" x1="26" y1="88" x2="74" y2="88" />
+      <circle class="guide-ball" cx="50" cy="90" r="1.6" />
+    </svg>
+    <div class="cam-overlay">
+      <div class="status-pill" id="camStatus">Starting camera…</div>
+      <div class="level"><div class="level-fill" id="levelFill"></div></div>
+    </div>
+  </div>
+
+  <div class="cam-controls">
+    <div class="segmented" role="tablist" id="modeTabs">
+      <button data-mode="auto" class="on">Hands-free</button>
+      <button data-mode="timer">Timer</button>
+      <button data-mode="tap">Tap</button>
+    </div>
+    <p class="muted small" id="modeHelp"></p>
+    <div class="cam-buttons">
+      <button class="btn btn-ghost" id="closeCamBtn">Close</button>
+      <button class="btn btn-primary" id="shutterBtn">Start</button>
+    </div>
+    <p class="muted small tip">In-browser recording is capped at your camera's normal frame rate. For ball flight and sharper impact timing, film in <strong>Slo-Mo</strong> in the Camera app and upload it.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────── Angle prompt ───────────────────────── -->
+<section class="screen" id="screen-angle">
+  <div class="hero">
+    <h1>Which angle is this?</h1>
+    <p class="lede">Different measurements come from different angles, so this changes what gets reported.</p>
+  </div>
+  <div class="actions">
+    <button class="btn btn-secondary choose-angle" data-view="dtl">
+      <span class="btn-title">Down the line</span>
+      <span class="btn-sub">Phone behind the ball, pointing at the target — swing plane, club path, start line</span>
+    </button>
+    <button class="btn btn-secondary choose-angle" data-view="faceon">
+      <span class="btn-title">Face on</span>
+      <span class="btn-sub">Phone square to your toe line — tempo, strike, low point, body movement</span>
+    </button>
+  </div>
+  <label class="check">
+    <input type="checkbox" id="rememberAngle">
+    <span>Remember this and stop asking</span>
+  </label>
+</section>
+
+<!-- ───────────────────────── Analysing ───────────────────────── -->
+<section class="screen" id="screen-analysing">
+  <div class="analysing">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1 id="analyseStage">Reading the clip</h1>
+    <div class="progress"><div class="progress-fill" id="analyseFill"></div></div>
+    <p class="muted" id="analyseHint">Keep this screen open — it takes a few seconds.</p>
+    <button class="btn btn-ghost" id="cancelAnalyseBtn">Cancel</button>
+  </div>
+</section>
+
+<!-- ───────────────────────── Report ───────────────────────── -->
+<section class="screen" id="screen-report">
+  <div class="report-head">
+    <div>
+      <h1 id="reportTitle">Swing</h1>
+      <p class="muted small" id="reportMeta"></p>
+    </div>
+    <span class="confidence" id="reportConfidence"></span>
+  </div>
+
+  <div class="card headline" id="headlineCard">
+    <p class="eyebrow">What to work on</p>
+    <h2 id="headlineTitle"></h2>
+    <p id="headlineText"></p>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <div class="section-head tight">
+      <h2>Swing trace</h2>
+      <div class="segmented small" id="phaseTabs">
+        <button data-phase="all" class="on">All</button>
+        <button data-phase="back">Back</button>
+        <button data-phase="down">Down</button>
+      </div>
+    </div>
+    <canvas id="traceCanvas"></canvas>
+    <div class="frame-tabs segmented small" id="frameTabs">
+      <button data-frame="address" class="on">Address</button>
+      <button data-frame="top">Top</button>
+      <button data-frame="impact">Impact</button>
+      <button data-frame="finish">Finish</button>
+    </div>
+    <label class="check inline">
+      <input type="checkbox" id="poseToggle" checked>
+      <span>Show body tracking</span>
+    </label>
+    <p class="muted small">Blue is the backswing, orange the downswing, red the follow-through. If the traced line does not follow your club head, treat the plane and path numbers below with suspicion.</p>
+  </div>
+
+  <div class="card" id="clipCard" hidden>
+    <div class="section-head tight"><h2>Clip</h2></div>
+    <video id="clipVideo" playsinline controls></video>
+    <div class="jump-row" id="jumpRow">
+      <button data-jump="address">Address</button>
+      <button data-jump="top">Top</button>
+      <button data-jump="impact">Impact</button>
+      <button data-jump="finish">Finish</button>
+    </div>
+    <div class="jump-row">
+      <button id="framePrev">◀ Frame</button>
+      <button id="frameNext">Frame ▶</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-head tight"><h2>Tempo timeline</h2></div>
+    <canvas id="energyCanvas"></canvas>
+    <p class="muted small">Movement in the picture over time. The blue band is your backswing, the orange band your downswing — the ratio between them is your tempo.</p>
+  </div>
+
+  <div class="card" id="slomoCard">
+    <div class="section-head tight"><h2>Slow-motion factor</h2></div>
+    <p class="muted small" id="slomoNote"></p>
+    <div class="segmented small" id="slomoTabs">
+      <button data-factor="1">Real time</button>
+      <button data-factor="2">2×</button>
+      <button data-factor="4">4×</button>
+      <button data-factor="8">8×</button>
+    </div>
+  </div>
+
+  <div class="section-head"><h2>Everything we measured</h2></div>
+  <div id="notesList"></div>
+
+  <div class="card" id="numbersCard">
+    <div class="section-head tight"><h2>Numbers</h2></div>
+    <table class="numbers" id="numbersTable"></table>
+  </div>
+
+  <div class="card">
+    <div class="section-head tight"><h2>Better footage next time</h2></div>
+    <ul class="tips" id="tipsList"></ul>
+  </div>
+
+  <div class="report-actions">
+    <button class="btn btn-ghost" id="deleteShotBtn">Delete this shot</button>
+    <button class="btn btn-primary" id="anotherBtn">Next shot</button>
+  </div>
+</section>
+
+<!-- ───────────────────────── Settings ───────────────────────── -->
+<section class="screen" id="screen-settings">
+  <div class="hero"><h1>Settings</h1></div>
+
+  <div class="card">
+    <label class="field row">
+      <span>I play</span>
+      <select id="handedSelect">
+        <option value="right">Right-handed</option>
+        <option value="left">Left-handed</option>
+      </select>
+    </label>
+    <label class="field row">
+      <span>My height</span>
+      <span class="input-suffix"><input type="number" id="heightInput" min="120" max="220" step="1"> cm</span>
+    </label>
+    <p class="muted small">Height is how distances and speeds get scaled from pixels into real units. Without it you still get every angle and ratio.</p>
+  </div>
+
+  <div class="card">
+    <label class="field row">
+      <span>Default camera angle</span>
+      <select id="angleSelect2">
+        <option value="ask">Ask me each time</option>
+        <option value="dtl">Down the line</option>
+        <option value="faceon">Face on</option>
+      </select>
+    </label>
+    <label class="field row">
+      <span>Slow motion</span>
+      <select id="slomoSelect">
+        <option value="auto">Detect automatically</option>
+        <option value="1">Always real time</option>
+        <option value="2">Always 2×</option>
+        <option value="4">Always 4×</option>
+        <option value="8">Always 8×</option>
+      </select>
+    </label>
+    <label class="field row">
+      <span>Stop recording after</span>
+      <span class="input-suffix"><input type="number" id="autoStopInput" min="1" max="10" step="1"> s</span>
+    </label>
+    <p class="muted small">How long hands-free mode keeps rolling after it sees your swing.</p>
+  </div>
+
+  <div class="card">
+    <label class="check inline">
+      <input type="checkbox" id="keepClipsToggle">
+      <span>Keep clips on this phone so I can replay them</span>
+    </label>
+    <label class="check inline">
+      <input type="checkbox" id="sunlightToggle">
+      <span>Bright sunlight mode</span>
+    </label>
+    <p class="muted small" id="storageNote"></p>
+    <button class="btn btn-ghost" id="clearAllBtn">Delete all shots</button>
+  </div>
+
+  <div class="card">
+    <div class="section-head tight"><h2>Use it offline</h2></div>
+    <p class="muted small" id="offlineNote">Ranges have bad signal. Download everything now, over wifi, and the app works with no connection at all.</p>
+    <button class="btn btn-secondary" id="offlineBtn">Download for offline use</button>
+  </div>
+
+  <div class="card">
+    <div class="section-head tight"><h2>Add to your home screen</h2></div>
+    <p class="muted small">In Safari, tap the Share button, then <strong>Add to Home Screen</strong>. It then opens full screen and keeps your shots between visits.</p>
+  </div>
+
+  <div class="card">
+    <div class="section-head tight"><h2>What this can and cannot do</h2></div>
+    <p class="muted small">Everything here is measured from a flat picture on one camera. Ratios, angles within the frame, and how a swing changes shot to shot are all solid. Anything converted into real-world units — club speed, ball speed, distances in centimetres — is an estimate scaled from your height, and reads low when movement is towards or away from the camera. It is a mirror with a memory, not a launch monitor.</p>
+  </div>
+</section>
+
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

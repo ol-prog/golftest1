@@ -1,0 +1,138 @@
+// Small shared helpers: DOM, math, formatting, persisted settings.
+
+export const $ = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+export const lerp = (a, b, t) => a + (b - a) * t;
+export const deg = (rad) => (rad * 180) / Math.PI;
+export const rad = (d) => (d * Math.PI) / 180;
+
+/** Mean of a numeric array (0 for empty). */
+export function mean(arr) {
+  if (!arr.length) return 0;
+  let s = 0;
+  for (const v of arr) s += v;
+  return s / arr.length;
+}
+
+/** Centred moving average. `half` is the radius in samples. */
+export function smooth(arr, half = 2) {
+  const out = new Float64Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    let s = 0;
+    let n = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(arr.length - 1, i + half); j++) {
+      s += arr[j];
+      n++;
+    }
+    out[i] = s / n;
+  }
+  return out;
+}
+
+/** Index of the largest value in `arr`, optionally restricted to [from, to]. */
+export function argmax(arr, from = 0, to = arr.length - 1) {
+  let best = from;
+  let bestV = -Infinity;
+  for (let i = Math.max(0, from); i <= Math.min(arr.length - 1, to); i++) {
+    if (arr[i] > bestV) {
+      bestV = arr[i];
+      best = i;
+    }
+  }
+  return best;
+}
+
+export function argmin(arr, from = 0, to = arr.length - 1) {
+  let best = from;
+  let bestV = Infinity;
+  for (let i = Math.max(0, from); i <= Math.min(arr.length - 1, to); i++) {
+    if (arr[i] < bestV) {
+      bestV = arr[i];
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * Least-squares line fit over points [{x, y}]. Returns the direction as an
+ * angle plus the R^2 of the fit, so callers can reject a fit that is not a line.
+ */
+export function fitLine(points) {
+  const n = points.length;
+  if (n < 2) return null;
+  let sx = 0, sy = 0;
+  for (const p of points) { sx += p.x; sy += p.y; }
+  const mx = sx / n, my = sy / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of points) {
+    const dx = p.x - mx, dy = p.y - my;
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  // Principal axis via the 2x2 covariance eigenvector: robust for steep lines,
+  // where a y-on-x regression would blow up.
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const dirX = Math.cos(theta), dirY = Math.sin(theta);
+  // Fraction of variance along the principal axis.
+  const varAlong = sxx * dirX * dirX + 2 * sxy * dirX * dirY + syy * dirY * dirY;
+  const total = sxx + syy;
+  return {
+    cx: mx, cy: my, dirX, dirY,
+    r2: total > 0 ? clamp(varAlong / total, 0, 1) : 0,
+  };
+}
+
+export const fmt1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : '--');
+export const fmt2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '--');
+export const fmt0 = (v) => (Number.isFinite(v) ? Math.round(v).toString() : '--');
+
+/** "1.9 : 1" style ratio label. */
+export function ratioLabel(r) {
+  return Number.isFinite(r) ? `${r.toFixed(1)} : 1` : '--';
+}
+
+export function fmtClock(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+const SETTINGS_KEY = 'gsa.settings.v1';
+const DEFAULT_SETTINGS = {
+  handed: 'right',
+  angle: 'ask',          // 'dtl' | 'faceon' | 'ask'
+  slomo: 'auto',         // 'auto' | '1' | '2' | '4' | '8'
+  heightCm: 178,
+  captureMode: 'auto',   // 'auto' | 'timer' | 'tap'
+  autoStopSec: 3,
+  sunlight: false,
+  keepClips: true,
+  club: '7 iron',
+};
+
+let settings = null;
+
+export function getSettings() {
+  if (settings) return settings;
+  try {
+    settings = { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+  } catch {
+    settings = { ...DEFAULT_SETTINGS };
+  }
+  return settings;
+}
+
+export function setSetting(key, value) {
+  const s = getSettings();
+  s[key] = value;
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    /* private browsing: settings just won't persist */
+  }
+  return s;
+}
+
+/** Yield to the event loop so long analysis passes keep the UI responsive. */
+export const nextTick = () => new Promise((r) => setTimeout(r, 0));
