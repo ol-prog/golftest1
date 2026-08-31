@@ -12,17 +12,26 @@ model, runs on the phone, so it works with no signal at all.
 
 ## Getting it on your phone
 
-The app is a static site, so GitHub Pages will serve it:
+The app is a static site, so GitHub Pages will serve it. Two things to do on
+github.com, both from a phone browser if you like:
 
-1. On github.com, open **`ol-prog/golftest1` → Settings → Pages**.
-2. Under **Source**, choose **Deploy from a branch**.
-3. Pick the branch this code is on and the folder **`/ (root)`**, then **Save**.
-4. Wait a minute or two, then open the URL Pages gives you in **Safari** on your
-   iPhone.
+1. **Make the repository public.** `ol-prog/golftest1` is currently private, and
+   Pages on a free account only serves public repositories.
+   *Settings → General → scroll to Danger Zone → Change visibility → Make
+   public.*
+2. **Turn Pages on.** *Settings → Pages → Source: **Deploy from a branch** →
+   Branch: `claude/golf-swing-analyzer-9hr0f7` (it is the default, so it should
+   already be selected) → Folder: `/ (root)` → **Save**.*
 
-The repository needs to be **public** for Pages on a free account. GitHub Pages
-serves over HTTPS, which iOS requires before it will grant camera access — the
-app cannot work from a file or over plain HTTP.
+Give it a minute or two and the site will be at:
+
+```
+https://ol-prog.github.io/golftest1/
+```
+
+Open that in **Safari** on your iPhone. Pages serves over HTTPS, which iOS
+requires before it will grant camera access — the app cannot work from a file or
+over plain HTTP.
 
 Then, in Safari: tap **Share → Add to Home Screen**. That gives it its own icon,
 opens it full screen without the browser chrome, and keeps your shots between
@@ -156,6 +165,19 @@ Repeated runs of the same clip agree to within a tenth of a degree on launch
 angle and a hundredth on tempo. At 30fps, without slo-mo, tempo lands around
 2.78 against a true 3.04, which is the quantisation limit when a downswing is
 only eight frames long.
+
+---
+
+## Tests
+
+```
+node test/smoke.mjs
+```
+
+Covers the pure analysis functions: degenerate and empty inputs, slow-motion
+factor recovery, and an analytic check that the delivery tangent on a known
+circular arc comes back exactly level at the bottom and exactly 10° descending
+ten degrees before it.
 
 ---
 
