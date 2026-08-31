@@ -264,3 +264,29 @@ input[type="number"] { width: 84px; text-align: right; }
   .spinner { animation: none; }
   * { transition: none !important; }
 }
+
+/* ── Report panes ───────────────────────────────────────────────────
+   The report was one very long scroll. Splitting it into numbers, the
+   swing itself, and what to do about it means each is a screenful. */
+.report-tabs { margin-bottom: 14px; }
+.pane { display: none; }
+#screen-report[data-pane="numbers"] .pane[data-pane="numbers"],
+#screen-report[data-pane="path"]    .pane[data-pane="path"],
+#screen-report[data-pane="tips"]    .pane[data-pane="tips"] { display: block; }
+
+/* The verdict stays visible whichever pane is open — it is the one thing
+   worth reading on every shot. */
+.verdict {
+  display: grid; gap: 3px; width: 100%; text-align: left;
+  padding: 12px 14px; margin-bottom: 12px;
+  background: var(--bg-raised); color: var(--text);
+  border: 1px solid var(--line); border-left: 3px solid var(--warn);
+  border-radius: var(--radius); font: inherit;
+}
+.verdict-label {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--text-dim);
+}
+.verdict-title { font-size: 15.5px; font-weight: 620; line-height: 1.3; }
+.verdict-more { font-size: 13px; color: var(--accent); }
+#screen-report[data-pane="tips"] .verdict { display: none; }

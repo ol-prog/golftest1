@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // Run with: node test/smoke.mjs
 //
 // Import every analysis module and exercise the pure functions, to catch
@@ -43,6 +44,24 @@ for (const [path, names] of Object.entries(MODULES)) {
   const missing = names.filter((n) => mod[n] === undefined);
   ok(`${path} exports${missing.length ? ' — missing ' + missing.join(', ') : ''}`, missing.length === 0);
 }
+
+// --- security and privacy regressions ------------------------------------
+const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const csp = (html.match(/Content-Security-Policy" content="([^"]+)"/) || [])[1] || '';
+const directive = (name) => (csp.match(new RegExp(`${name} ([^;]+)`)) || [])[1]?.trim() || '';
+ok('page declares a content security policy', csp.length > 0);
+ok('no outbound connections allowed', directive('connect-src') === "'self'");
+ok('no third-party script allowed', directive('script-src') === "'self' 'wasm-unsafe-eval'");
+ok('no plugins or embeds', directive('object-src') === "'none'");
+ok('referrer withheld', /name="referrer" content="no-referrer"/.test(html));
+
+const bundle = readFileSync(new URL('../vendor/mediapipe/vision_bundle.mjs', import.meta.url), 'utf8');
+const outbound = [...bundle.matchAll(/https?:\/\/[a-zA-Z0-9.\-_/]+/g)].map((m) => m[0]);
+ok(`vendored model code has no outbound URLs${outbound.length ? ' — found ' + outbound[0] : ''}`, outbound.length === 0);
+
+ok('escapeHtml neutralises markup',
+  util.escapeHtml('<img src=x onerror="alert(1)">') === '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
+ok('escapeHtml handles null', util.escapeHtml(null) === '');
 
 // Degenerate inputs must not throw.
 ok('detectEvents too short', events.detectEvents(new Float64Array(4), [0, 1, 2, 3]).ok === false);

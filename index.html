@@ -6,6 +6,29 @@
 <title>Swing Lab — golf swing analyser</title>
 <meta name="description" content="Film or upload a golf swing and get tempo, swing plane, club path, strike and body movement analysed on your phone.">
 <meta name="theme-color" content="#0d1117">
+<!-- Everything this app needs is served from its own origin, so the policy can
+     be strict: no third-party script, no outbound connection, nothing embedded.
+     connect-src 'self' is what guarantees no swing footage or usage data can
+     leave the phone, whatever any dependency might try.
+     'wasm-unsafe-eval' is required for the body-tracking model's WebAssembly.
+     blob: covers clips and stills held in memory as object URLs.
+     Note: frame-ancestors and X-Frame-Options cannot be set from a meta tag or
+     on GitHub Pages, so clickjacking protection would need a real host. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'wasm-unsafe-eval';
+  style-src 'self';
+  img-src 'self' blob: data:;
+  media-src 'self' blob:;
+  connect-src 'self';
+  worker-src 'self' blob:;
+  font-src 'self';
+  manifest-src 'self';
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none'">
+<meta name="referrer" content="no-referrer">
+
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Swing Lab">
@@ -148,7 +171,7 @@
 </section>
 
 <!-- ───────────────────────── Report ───────────────────────── -->
-<section class="screen" id="screen-report">
+<section class="screen" id="screen-report" data-pane="numbers">
   <div class="report-head">
     <div>
       <h1 id="reportTitle">Swing</h1>
@@ -157,38 +180,46 @@
     <span class="confidence" id="reportConfidence"></span>
   </div>
 
-  <div class="card headline" id="headlineCard">
-    <p class="eyebrow">What to work on</p>
-    <h2 id="headlineTitle"></h2>
-    <p id="headlineText"></p>
+  <button class="verdict" id="verdictStrip" type="button">
+    <span class="verdict-label">What to work on</span>
+    <span class="verdict-title" id="verdictTitle"></span>
+    <span class="verdict-more">Read the advice ›</span>
+  </button>
+
+  <div class="segmented report-tabs" id="reportTabs">
+    <button data-pane="numbers" class="on">Numbers</button>
+    <button data-pane="path">Swing path</button>
+    <button data-pane="tips">Tips</button>
   </div>
 
+  <div class="pane" data-pane="numbers">
   <div class="tiles" id="tiles"></div>
 
   <div class="card">
-    <div class="section-head tight">
-      <h2>Swing trace</h2>
-      <div class="segmented small" id="phaseTabs">
-        <button data-phase="all" class="on">All</button>
-        <button data-phase="back">Back</button>
-        <button data-phase="down">Down</button>
-      </div>
-    </div>
-    <canvas id="traceCanvas"></canvas>
-    <div class="frame-tabs segmented small" id="frameTabs">
-      <button data-frame="address" class="on">Address</button>
-      <button data-frame="top">Top</button>
-      <button data-frame="impact">Impact</button>
-      <button data-frame="finish">Finish</button>
-    </div>
-    <label class="check inline">
-      <input type="checkbox" id="poseToggle" checked>
-      <span>Show body angles</span>
-    </label>
-    <p class="muted small" id="poseNote" hidden></p>
-    <p class="muted small">Blue is the backswing, orange the downswing, red the follow-through. If the traced line does not follow your club head, treat the plane and path numbers below with suspicion.</p>
+    <div class="section-head tight"><h2>Tempo timeline</h2></div>
+    <canvas id="energyCanvas"></canvas>
+    <p class="muted small">Movement in the picture over time. The blue band is your backswing, the orange band your downswing — the ratio between them is your tempo.</p>
   </div>
 
+  <div class="card" id="slomoCard">
+    <div class="section-head tight"><h2>Slow-motion factor</h2></div>
+    <p class="muted small" id="slomoNote"></p>
+    <div class="segmented small" id="slomoTabs">
+      <button data-factor="1">Real time</button>
+      <button data-factor="2">2×</button>
+      <button data-factor="4">4×</button>
+      <button data-factor="8">8×</button>
+    </div>
+  </div>
+
+  <div class="card" id="numbersCard">
+    <div class="section-head tight"><h2>Numbers</h2></div>
+    <table class="numbers" id="numbersTable"></table>
+  </div>
+
+  </div>
+
+  <div class="pane" data-pane="path">
   <div class="card" id="clipCard">
     <div class="section-head tight">
       <h2>Swing tracer</h2>
@@ -222,33 +253,46 @@
   </div>
 
   <div class="card">
-    <div class="section-head tight"><h2>Tempo timeline</h2></div>
-    <canvas id="energyCanvas"></canvas>
-    <p class="muted small">Movement in the picture over time. The blue band is your backswing, the orange band your downswing — the ratio between them is your tempo.</p>
+    <div class="section-head tight">
+      <h2>Swing trace</h2>
+      <div class="segmented small" id="phaseTabs">
+        <button data-phase="all" class="on">All</button>
+        <button data-phase="back">Back</button>
+        <button data-phase="down">Down</button>
+      </div>
+    </div>
+    <canvas id="traceCanvas"></canvas>
+    <div class="frame-tabs segmented small" id="frameTabs">
+      <button data-frame="address" class="on">Address</button>
+      <button data-frame="top">Top</button>
+      <button data-frame="impact">Impact</button>
+      <button data-frame="finish">Finish</button>
+    </div>
+    <label class="check inline">
+      <input type="checkbox" id="poseToggle" checked>
+      <span>Show body angles</span>
+    </label>
+    <p class="muted small" id="poseNote" hidden></p>
+    <p class="muted small">Blue is the backswing, orange the downswing, red the follow-through. If the traced line does not follow your club head, treat the plane and path numbers below with suspicion.</p>
   </div>
 
-  <div class="card" id="slomoCard">
-    <div class="section-head tight"><h2>Slow-motion factor</h2></div>
-    <p class="muted small" id="slomoNote"></p>
-    <div class="segmented small" id="slomoTabs">
-      <button data-factor="1">Real time</button>
-      <button data-factor="2">2×</button>
-      <button data-factor="4">4×</button>
-      <button data-factor="8">8×</button>
-    </div>
+  </div>
+
+  <div class="pane" data-pane="tips">
+  <div class="card headline" id="headlineCard">
+    <p class="eyebrow">What to work on</p>
+    <h2 id="headlineTitle"></h2>
+    <p id="headlineText"></p>
   </div>
 
   <div class="section-head"><h2>Everything we measured</h2></div>
   <div id="notesList"></div>
 
-  <div class="card" id="numbersCard">
-    <div class="section-head tight"><h2>Numbers</h2></div>
-    <table class="numbers" id="numbersTable"></table>
-  </div>
-
   <div class="card">
     <div class="section-head tight"><h2>Better footage next time</h2></div>
     <ul class="tips" id="tipsList"></ul>
+  </div>
+
   </div>
 
   <div class="report-actions">
@@ -257,7 +301,6 @@
   </div>
 </section>
 
-<!-- ───────────────────────── Settings ───────────────────────── -->
 <section class="screen" id="screen-settings">
   <div class="hero"><h1>Settings</h1></div>
 

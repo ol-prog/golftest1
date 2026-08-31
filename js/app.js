@@ -1,6 +1,6 @@
 // Screen wiring for Swing Lab.
 
-import { $, $$, getSettings, setSetting, fmt0, fmt1, ratioLabel, fmtClock, clamp } from './util.js';
+import { $, $$, getSettings, setSetting, fmt0, fmt1, ratioLabel, fmtClock, clamp, escapeHtml } from './util.js';
 import { analyseSwing } from './analyse.js';
 import { coachReport } from './coach.js';
 import { drawTrace, drawEnergy, drawSparkline, sizeCanvasTo } from './overlay.js';
@@ -24,6 +24,7 @@ const state = {
   phase: 'all',
   capture: null,
   tracer: null,
+  pane: 'numbers',
   mode: getSettings().captureMode,
   cancelled: false,
 };
@@ -199,6 +200,7 @@ async function showReport(shot) {
   state.frame = 'address';
   state.phase = 'all';
   go('report');
+  setPane('numbers');
 
   for (const key of ['address', 'top', 'impact', 'finish']) {
     const blob = shot.stills && shot.stills[key];
@@ -221,10 +223,10 @@ function confidenceLabel(c) {
 }
 
 function tile(label, value, note, level = '') {
-  return `<div class="tile ${level}">
-    <div class="tile-label">${label}</div>
-    <div class="tile-value">${value}</div>
-    <div class="tile-note">${note || ''}</div>
+  return `<div class="tile ${escapeHtml(level)}">
+    <div class="tile-label">${escapeHtml(label)}</div>
+    <div class="tile-value">${escapeHtml(value)}</div>
+    <div class="tile-note">${escapeHtml(note || '')}</div>
   </div>`;
 }
 
@@ -295,9 +297,11 @@ function buildTiles(r) {
 }
 
 function row(label, value) {
-  return value == null || value === '' ? '' : `<tr><th>${label}</th><td>${value}</td></tr>`;
+  return value == null || value === ''
+    ? ''
+    : `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`;
 }
-const group = (label) => `<tr class="group"><th colspan="2">${label}</th></tr>`;
+const group = (label) => `<tr class="group"><th colspan="2">${escapeHtml(label)}</th></tr>`;
 const dgr = (v, d = 1) => (Number.isFinite(v) ? `${v.toFixed(d)}°` : null);
 const cmv = (v) => (Number.isFinite(v) ? `${v.toFixed(1)} cm` : null);
 const sec = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} s` : null);
@@ -376,15 +380,16 @@ function renderReport() {
 
   $('#headlineTitle').textContent = coach.headline.title;
   $('#headlineText').textContent = coach.headline.text;
+  $('#verdictTitle').textContent = coach.headline.title;
   $('#tiles').innerHTML = buildTiles(r);
 
-  const warnings = (r.warnings || []).map((w) => `<div class="note watch"><div><h3>Worth knowing</h3><p>${w}</p></div></div>`).join('');
-  const notes = coach.notes.map((n) => `<div class="note ${n.level}"><div><h3>${n.title}</h3><p>${n.text}</p></div></div>`).join('');
-  const caveats = (r.notes || []).map((n) => `<div class="note"><div><h3>Note</h3><p>${n}</p></div></div>`).join('');
+  const warnings = (r.warnings || []).map((w) => `<div class="note watch"><div><h3>Worth knowing</h3><p>${escapeHtml(w)}</p></div></div>`).join('');
+  const notes = coach.notes.map((n) => `<div class="note ${escapeHtml(n.level)}"><div><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.text)}</p></div></div>`).join('');
+  const caveats = (r.notes || []).map((n) => `<div class="note"><div><h3>Note</h3><p>${escapeHtml(n)}</p></div></div>`).join('');
   $('#notesList').innerHTML = warnings + notes + caveats;
 
   $('#numbersTable').innerHTML = buildNumbers(r);
-  $('#tipsList').innerHTML = coach.filming.map((t) => `<li>${t}</li>`).join('');
+  $('#tipsList').innerHTML = coach.filming.map((t) => `<li>${escapeHtml(t)}</li>`).join('');
 
   $$('#slomoTabs button').forEach((b) => b.classList.toggle('on', Number(b.dataset.factor) === (r.slomo?.factor || 1)));
   $('#slomoNote').textContent = r.slomo?.source === 'auto'
@@ -395,24 +400,52 @@ function renderReport() {
   drawReportCanvases();
 }
 
+/** Switch report pane. Canvases in a hidden pane have no width, so anything
+ *  that draws has to wait until its pane is showing. */
+function setPane(pane) {
+  state.pane = pane;
+  $('#screen-report').dataset.pane = pane;
+  $$('#reportTabs button').forEach((b) => b.classList.toggle('on', b.dataset.pane === pane));
+  window.scrollTo(0, 0);
+  if (pane === 'numbers') drawReportCanvases();
+  if (pane === 'path') {
+    drawReportCanvases();
+    if (state.tracer) state.tracer.draw();
+  }
+}
+
+/** Usable width for a canvas, or 0 when its pane is not on screen. */
+function paneWidth(canvas) {
+  const parent = canvas.parentElement;
+  return parent ? parent.clientWidth - 28 : 0;
+}
+
 function drawReportCanvases() {
   const r = state.report;
   if (!r) return;
-  const width = $('#traceCanvas').parentElement.clientWidth - 28;
-  const aspect = r.trace?.aspect || (r.videoHeight / r.videoWidth) || 0.5625;
-  const ctx = sizeCanvasTo($('#traceCanvas'), aspect, Math.max(200, width));
-  const wantPose = $('#poseToggle').checked;
-  const havePose = Boolean(r.poseFrames && r.poseFrames[state.frame]);
-  drawTrace(ctx, state.stillImages[state.frame], r, {
-    phase: state.phase,
-    showPose: wantPose && havePose ? state.frame : null,
-  });
-  const poseNote = $('#poseNote');
-  poseNote.hidden = !wantPose || havePose;
-  if (wantPose && !havePose) {
-    poseNote.textContent = `Your body could not be picked out in the ${state.frame} frame, so there are no angles to draw on it. That usually means part of you was out of shot or motion-blurred.`;
+  // Each canvas is measured against its own container: they live in different
+  // panes now, and only one pane has a width at any moment.
+  const traceCanvas = $('#traceCanvas');
+  const traceWidth = paneWidth(traceCanvas);
+  if (traceWidth > 0) {
+    const aspect = r.trace?.aspect || (r.videoHeight / r.videoWidth) || 0.5625;
+    const ctx = sizeCanvasTo(traceCanvas, aspect, Math.max(200, traceWidth));
+    const wantPose = $('#poseToggle').checked;
+    const havePose = Boolean(r.poseFrames && r.poseFrames[state.frame]);
+    drawTrace(ctx, state.stillImages[state.frame], r, {
+      phase: state.phase,
+      showPose: wantPose && havePose ? state.frame : null,
+    });
+    const poseNote = $('#poseNote');
+    poseNote.hidden = !wantPose || havePose;
+    if (wantPose && !havePose) {
+      poseNote.textContent = `Your body could not be picked out in the ${state.frame} frame, so there are no angles to draw on it. That usually means part of you was out of shot or motion-blurred.`;
+    }
   }
-  drawEnergy($('#energyCanvas'), r, Math.max(200, width));
+
+  const energyCanvas = $('#energyCanvas');
+  const energyWidth = paneWidth(energyCanvas);
+  if (energyWidth > 0) drawEnergy(energyCanvas, r, Math.max(200, energyWidth));
 }
 
 function renderClip(shot) {
@@ -515,14 +548,29 @@ async function refreshSession() {
     const btn = document.createElement('button');
     btn.className = 'shot';
     const still = shot.stills && shot.stills.impact;
-    const url = still ? URL.createObjectURL(still) : '';
-    btn.innerHTML = `
-      ${url ? `<img src="${url}" alt="">` : '<div class="shot-img"></div>'}
-      <div class="shot-main">
-        <strong>${shot.clubName || 'Swing'}</strong>
-        <span>${fmtClock(shot.ts)} · ${shot.view === 'dtl' ? 'Down the line' : 'Face on'}</span>
-      </div>
-      <div class="shot-tempo">${shot.timing && Number.isFinite(shot.timing.tempoRatio) ? shot.timing.tempoRatio.toFixed(1) : '–'}</div>`;
+    // Built as nodes, not markup: these values come back out of storage, and a
+    // stored record is exactly the thing that should never be able to inject.
+    if (still) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(still);
+      img.alt = '';
+      btn.appendChild(img);
+    } else {
+      btn.appendChild(document.createElement('div')).className = 'shot-img';
+    }
+    const main = document.createElement('div');
+    main.className = 'shot-main';
+    const name = document.createElement('strong');
+    name.textContent = shot.clubName || 'Swing';
+    const when = document.createElement('span');
+    when.textContent = `${fmtClock(shot.ts)} · ${shot.view === 'dtl' ? 'Down the line' : 'Face on'}`;
+    main.append(name, when);
+    const tempo = document.createElement('div');
+    tempo.className = 'shot-tempo';
+    tempo.textContent = shot.timing && Number.isFinite(shot.timing.tempoRatio)
+      ? shot.timing.tempoRatio.toFixed(1)
+      : '–';
+    btn.append(main, tempo);
     btn.addEventListener('click', async () => {
       const full = await getShot(shot.id);
       if (full) showReport(full);
@@ -680,6 +728,11 @@ function bindEvents() {
     state.cancelled = true;
     go('range', { replace: true });
   });
+
+  $$('#reportTabs button').forEach((b) => b.addEventListener('click', () => {
+    setPane(b.dataset.pane);
+  }));
+  $('#verdictStrip').addEventListener('click', () => setPane('tips'));
 
   $$('#phaseTabs button').forEach((b) => b.addEventListener('click', () => {
     state.phase = b.dataset.phase;

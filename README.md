@@ -202,6 +202,7 @@ All in vanilla JavaScript, no build step, no framework.
 | `js/coach.js` | Turns measurements into plain English. Rule-based and offline. |
 | `js/capture.js` | Camera, framing guide, and the three recording modes. |
 | `js/tracer.js` | Draws the fitted club-head path and ball flight over the clip, in step with playback. |
+| `tools/harden-vendor.mjs` | Strips telemetry from the vendored model code, and verifies it stays stripped. |
 
 Two details worth knowing:
 
@@ -257,15 +258,46 @@ only eight frames long.
 node test/smoke.mjs
 ```
 
-Covers the pure analysis functions: degenerate and empty inputs, slow-motion
+Covers the security and privacy guarantees — the content security policy, the
+absence of any outbound URL in the vendored library, and HTML escaping — plus
+that every module loads and exports what its importers reach for, and the pure
+analysis functions: degenerate and empty inputs, slow-motion
 factor recovery, and an analytic check that the delivery tangent on a known
 circular arc comes back exactly level at the bottom and exactly 10° descending
 ten degrees before it.
 
 ---
 
-## Privacy
+## Privacy and security
 
-Clips, key frames and reports are stored in IndexedDB on the phone and never
-leave it. There is no server, no account and no analytics. Deleting a shot, or
-using **Delete all shots** in settings, removes it.
+Swings are video of you. The app is built so that footage never leaves your
+phone, and so that the claim is something you can check rather than something
+you have to take on trust.
+
+- **No backend, no account, no analytics.** Clips, key frames and reports live in
+  the phone's own storage. There is no server to send them to.
+- **A content security policy the page enforces on itself.** `connect-src 'self'`
+  means the browser will refuse any outbound connection, whatever a dependency
+  might try; `script-src 'self'` means no third-party code can run at all.
+- **The body-tracking library's telemetry has been removed.** MediaPipe Tasks
+  batches usage logs to a Google endpoint. It is stripped out of the vendored
+  bundle by `tools/harden-vendor.mjs`, which can be re-run and re-checked after
+  any update to the library, and the tests fail if an outbound URL reappears.
+- **Everything rendered is escaped.** Nothing shown today comes from anywhere but
+  your own phone, but stored data rendered as markup is how apps grow injection
+  bugs quietly, so the boundary is escaped now rather than later.
+- **No referrer is sent** and the page cannot be navigated away by a form.
+
+This is verified rather than asserted: the test suite runs a complete analysis
+in a browser with every non-local request blocked, and fails if a single
+off-origin request is attempted or a single policy violation is raised.
+
+Two things worth being straight about:
+
+- **Anyone with your unlocked phone can open the app and watch your swings.**
+  There is no lock on the app itself. Settings → Delete all shots removes
+  everything.
+- **Clickjacking protection needs a real host.** `frame-ancestors` and
+  `X-Frame-Options` can only be set as HTTP headers, and GitHub Pages does not
+  let you set headers. It is a low risk for an app with nothing to click, but it
+  is not zero, and it is not something a static host can fix.
