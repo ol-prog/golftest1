@@ -7,6 +7,10 @@ import { drawTrace, drawEnergy, drawSparkline, sizeCanvasTo } from './overlay.js
 import { Capture, captureSupported } from './capture.js';
 import { Tracer } from './tracer.js';
 import {
+  getProfile, saveProfile, deleteProfile,
+  shouldOfferProfile, declineProfile, countAnalysis, shortName,
+} from './profile.js';
+import {
   saveShot, listShots, getShot, deleteShot, clearShots,
   storageEstimate, requestPersistence, pruneClips, MAX_STORED_CLIP_BYTES, newId,
 } from './store.js';
@@ -53,6 +57,37 @@ function back() {
     state.capture = null;
   }
   if (prev === 'range') refreshSession();
+}
+
+/** Show the profile in the header and on the settings screen. */
+function renderProfile() {
+  const profile = getProfile();
+  const chip = $('#whoChip');
+  chip.hidden = !profile;
+  if (profile) chip.textContent = shortName(profile);
+  $('#settingsName').value = profile ? profile.name : '';
+  $('#profileDelete').hidden = !profile;
+  $('#profileState').textContent = profile
+    ? `Saved on this phone since ${new Date(profile.createdAt).toLocaleDateString()}. It has never left it.`
+    : 'No profile yet. Adding one puts your name on your shots and makes the distances and angles real rather than assumed.';
+}
+
+/**
+ * Offer the profile after a swing has been analysed — never before. The whole
+ * point is that the value is visible first.
+ */
+function maybeOfferProfile() {
+  if (!shouldOfferProfile()) return;
+  const s = getSettings();
+  $('#profileName').value = '';
+  $('#profileHanded').value = s.handed;
+  $('#profileHeight').value = s.heightCm;
+  $('#profileSheet').hidden = false;
+  setTimeout(() => $('#profileName').focus({ preventScroll: true }), 250);
+}
+
+function closeProfileSheet() {
+  $('#profileSheet').hidden = true;
 }
 
 let toastTimer = null;
@@ -160,7 +195,9 @@ async function runAnalysis(blob, view) {
       toast(`Storage was filling up, so the video from ${dropped} older shot${dropped > 1 ? 's was' : ' was'} dropped. Their measurements are still there.`, 4200);
     }
     state.history = ['range'];
+    countAnalysis();
     showReport(shot);
+    maybeOfferProfile();
   } catch (err) {
     console.error(err);
     go('range', { replace: true });
@@ -803,6 +840,52 @@ function bindEvents() {
   });
   $('#offlineBtn').addEventListener('click', downloadOfflinePack);
 
+  $('#whoChip').addEventListener('click', () => go('settings'));
+  $('#profileLater').addEventListener('click', () => {
+    declineProfile();
+    closeProfileSheet();
+  });
+  $('#profileSheet').addEventListener('click', (e) => {
+    // Tapping the backdrop is the same as "not now".
+    if (e.target === $('#profileSheet')) {
+      declineProfile();
+      closeProfileSheet();
+    }
+  });
+  $('#profileCreate').addEventListener('click', () => {
+    const name = $('#profileName').value.trim();
+    if (!name) {
+      $('#profileName').focus();
+      toast('A name is all it needs.');
+      return;
+    }
+    const saved = saveProfile({
+      name,
+      handed: $('#profileHanded').value,
+      heightCm: Number($('#profileHeight').value),
+    });
+    closeProfileSheet();
+    if (!saved) {
+      toast('Your phone would not let the profile be saved. Private browsing blocks it.', 5000);
+      return;
+    }
+    bindSettings();
+    renderProfile();
+    toast(`Saved. Good to meet you, ${shortName(saved)}.`);
+  });
+  $('#settingsName').addEventListener('change', (e) => {
+    const name = e.target.value.trim();
+    if (!name) return;
+    saveProfile({ name });
+    renderProfile();
+  });
+  $('#profileDelete').addEventListener('click', () => {
+    if (!window.confirm('Delete your profile? Your shots stay where they are.')) return;
+    deleteProfile();
+    renderProfile();
+    toast('Profile deleted.');
+  });
+
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
@@ -829,6 +912,7 @@ function registerServiceWorker() {
 
 requestPersistence().catch(() => {});
 bindSettings();
+renderProfile();
 bindEvents();
 setMode(getSettings().captureMode);
 refreshSession();

@@ -75,6 +75,42 @@ start.
 
 ---
 
+## Reading a report
+
+Three panes, because the whole thing used to be one very long scroll:
+
+- **Numbers** — tempo, the measurements, the timeline the tempo split is read
+  off, and the slow-motion factor.
+- **Swing path** — the clip with the tracer on it, and the still frames with the
+  swing arc and your body angles drawn over them.
+- **Tips** — what to work on, everything the app noticed, and how to get better
+  footage next time.
+
+The verdict sits above all three, because it is the one thing worth reading on
+every shot and it should not be behind a tab.
+
+---
+
+## Your profile
+
+After your first swing has been analysed — never before — the app offers to keep
+a profile. It is a name, your handedness, and your height.
+
+It is worth having for a concrete reason rather than a sentimental one: height
+is what turns pixels into centimetres and miles per hour, and handedness sets
+which way "towards the target" is. Without them those figures are working off an
+assumption.
+
+There is no account in the usual sense, and the app does not pretend otherwise.
+There is no server behind it, so there is no email, no password, and nothing to
+sign in to. The profile is a record on your phone, and deleting it is one tap in
+settings.
+
+Declining is an answer: it is asked once and then left alone. The profile is
+still there in settings whenever you actually want it.
+
+---
+
 ## The swing tracer
 
 Play the clip back and one smooth line draws itself along your club head as it
@@ -274,8 +310,8 @@ Swings are video of you. The app is built so that footage never leaves your
 phone, and so that the claim is something you can check rather than something
 you have to take on trust.
 
-- **No backend, no account, no analytics.** Clips, key frames and reports live in
-  the phone's own storage. There is no server to send them to.
+- **No backend, no account, no analytics.** Clips, key frames, reports and your
+  profile live in the phone's own storage. There is no server to send them to.
 - **A content security policy the page enforces on itself.** `connect-src 'self'`
   means the browser will refuse any outbound connection, whatever a dependency
   might try; `script-src 'self'` means no third-party code can run at all.

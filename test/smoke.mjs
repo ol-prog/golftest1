@@ -28,6 +28,8 @@ const MODULES = {
   '../js/tracer.js': ['Tracer'],
   '../js/store.js': ['saveShot', 'listShots', 'deleteShot', 'pruneClips'],
   '../js/capture.js': ['Capture', 'captureSupported'],
+  '../js/profile.js': ['getProfile', 'saveProfile', 'deleteProfile',
+    'shouldOfferProfile', 'declineProfile', 'countAnalysis', 'shortName'],
 };
 
 const checks = [];

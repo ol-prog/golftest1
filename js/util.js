@@ -127,6 +127,8 @@ const DEFAULT_SETTINGS = {
   sunlight: false,
   keepClips: true,
   club: '7 iron',
+  shotsAnalysed: 0,
+  profileDeclined: false,
 };
 
 let settings = null;

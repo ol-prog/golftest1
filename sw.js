@@ -24,6 +24,7 @@ const SHELL = [
   'js/overlay.js',
   'js/capture.js',
   'js/tracer.js',
+  'js/profile.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
